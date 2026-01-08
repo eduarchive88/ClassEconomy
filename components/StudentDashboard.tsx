@@ -1,10 +1,12 @@
 
 import React, { useState, useEffect } from 'react';
 import { 
-  Wallet, Landmark, LineChart, ShoppingBag, Map, Send, Search, History, HelpCircle, CheckCircle2, Clock, User, CheckSquare, Square
+  Wallet, Landmark, LineChart, ShoppingBag, Map, Send, Search, History, HelpCircle, CheckCircle2, Clock, User, CheckSquare, Square,
+  TrendingUp, TrendingDown, ExternalLink, Sparkles, X, ChevronRight, Newspaper
 } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
-import { Student, Transaction, Quiz, SavingsRecord } from '../types';
+import { getMarketData, getEconomyNews, summarizeNews } from '../services/geminiService';
+import { Student, Transaction, Quiz, SavingsRecord, EconomySettings } from '../types';
 
 interface Props {
   studentId: string;
@@ -16,6 +18,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
   const [friends, setFriends] = useState<Student[]>([]);
   const [logs, setLogs] = useState<Transaction[]>([]);
   const [savings, setSavings] = useState<SavingsRecord[]>([]);
+  const [sessionSettings, setSessionSettings] = useState<EconomySettings | null>(null);
   
   // 퀴즈 관련
   const [dailyQuizzes, setDailyQuizzes] = useState<Quiz[]>([]);
@@ -30,14 +33,42 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
   const [bankPath, setBankPath] = useState<{from: string, to: string} | null>(null);
   const [investPath, setInvestPath] = useState<{from: string, to: string} | null>(null);
 
+  // 투자 및 뉴스 관련
+  const [marketData, setMarketData] = useState<{ stocks: any[], coins: any[] }>({ stocks: [], coins: [] });
+  const [economyNews, setEconomyNews] = useState<any[]>([]);
+  const [selectedNews, setSelectedNews] = useState<any | null>(null);
+  const [newsSummary, setNewsSummary] = useState('');
+  const [isSummarizing, setIsSummarizing] = useState(false);
+
   useEffect(() => {
     fetchStudentData();
   }, [studentId, activeTab]);
+
+  // 시장 데이터 및 뉴스 1시간마다 갱신
+  useEffect(() => {
+    if (activeTab === 'invest') {
+      const loadInvestData = async () => {
+        setIsLoading(true);
+        try {
+          const [m, n] = await Promise.all([getMarketData(), getEconomyNews()]);
+          setMarketData(m);
+          setEconomyNews(n);
+        } catch (e) { console.error(e); }
+        finally { setIsLoading(false); }
+      };
+      loadInvestData();
+      const timer = setInterval(loadInvestData, 3600000);
+      return () => clearInterval(timer);
+    }
+  }, [activeTab]);
 
   const fetchStudentData = async () => {
     const { data: st } = await supabase.from('students').select('*').eq('id', studentId).single();
     if (st) {
       setStudent(st);
+      const { data: setts } = await supabase.from('economy_settings').select('*').eq('session_code', st.session_code).single();
+      if (setts) setSessionSettings(setts);
+      
       const { data: fr } = await supabase.from('students').select('*').eq('session_code', st.session_code).neq('id', studentId).order('id', { ascending: true });
       if (fr) setFriends(fr);
       const { data: tx } = await supabase.from('transactions').select('*').or(`sender_id.eq.${studentId},receiver_id.eq.${studentId}`).order('created_at', { ascending: false }).limit(20);
@@ -99,8 +130,6 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
 
   const handleAssetTransfer = async (from: string, to: string) => {
     if (!student || transferAmount <= 0) return alert('금액을 입력해주세요.');
-    
-    // 은행 출금 시에만 1주일 락 확인 (증권은 락 제외)
     if (from === 'bank_balance') {
       const myBankSavings = savings.filter(s => s.account_type === 'bank');
       const now = new Date();
@@ -113,72 +142,50 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
         return;
       }
     }
-
     const currentFromBalance = (student as any)[from];
     if (currentFromBalance < transferAmount) return alert('잔액이 부족합니다.');
-
     setIsLoading(true);
     try {
-      const updates = { 
-        [from]: currentFromBalance - transferAmount,
-        [to]: (student as any)[to] + transferAmount 
-      };
+      const updates = { [from]: currentFromBalance - transferAmount, [to]: (student as any)[to] + transferAmount };
       await supabase.from('students').update(updates).eq('id', studentId);
-      
       if (to !== 'balance') {
-        await supabase.from('savings_records').insert({
-          student_id: studentId, amount: transferAmount, account_type: to === 'bank_balance' ? 'bank' : 'brokerage'
-        });
+        await supabase.from('savings_records').insert({ student_id: studentId, amount: transferAmount, account_type: to === 'bank_balance' ? 'bank' : 'brokerage' });
       }
-
       await supabase.from('transactions').insert({
         session_code: student.session_code, sender_id: student.id, sender_name: student.name,
         receiver_id: student.id, receiver_name: student.name, amount: transferAmount, type: 'transfer',
         description: `${from === 'balance' ? '현금' : from === 'bank_balance' ? '은행' : '증권'} → ${to === 'balance' ? '현금' : to === 'bank_balance' ? '은행' : '증권'} 이체`
       });
-
       alert('이체 완료!');
-      setTransferAmount(0);
-      setBankPath(null);
-      setInvestPath(null);
-      fetchStudentData();
+      setTransferAmount(0); setBankPath(null); setInvestPath(null); fetchStudentData();
     } catch (e) { alert('오류 발생'); }
     finally { setIsLoading(false); }
   };
 
   const handleSendMoney = async () => {
     if (!student || transferAmount <= 0 || selectedRecipientIds.length === 0) return alert('송금 대상과 금액을 확인해주세요.');
-    
     const totalRequired = transferAmount * selectedRecipientIds.length;
     if (student.balance < totalRequired) return alert(`현금이 부족합니다. (필요 금액: ${totalRequired.toLocaleString()}원)`);
-
     const recipientNames = selectedRecipientIds.map(id => id === 'GOVERNMENT' ? '정부' : friends.find(f => f.id === id)?.name).join(', ');
     if (!confirm(`${recipientNames}님에게 각각 ${transferAmount.toLocaleString()}원씩 송금할까요?`)) return;
-
     setIsLoading(true);
     try {
       await supabase.from('students').update({ balance: student.balance - totalRequired }).eq('id', studentId);
-      
       for (const rId of selectedRecipientIds) {
         const recipient = rId === 'GOVERNMENT' ? { id: 'GOVERNMENT', name: '정부' } : friends.find(f => f.id === rId);
         if (!recipient) continue;
-
         if (rId !== 'GOVERNMENT') {
           const { data: rTarget } = await supabase.from('students').select('balance').eq('id', rId).single();
           if (rTarget) await supabase.from('students').update({ balance: rTarget.balance + transferAmount }).eq('id', rId);
         }
-
         await supabase.from('transactions').insert({
           session_code: student.session_code, sender_id: student.id, sender_name: student.name,
           receiver_id: recipient.id, receiver_name: recipient.name, amount: transferAmount, type: 'transfer',
           description: `${recipient.name}님에게 송금`
         });
       }
-
       alert('송금 완료!');
-      setTransferAmount(0);
-      setSelectedRecipientIds([]);
-      fetchStudentData();
+      setTransferAmount(0); setSelectedRecipientIds([]); fetchStudentData();
     } catch (e) { alert('송금 중 오류가 발생했습니다.'); }
     finally { setIsLoading(false); }
   };
@@ -200,21 +207,24 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
     fetchStudentData();
   };
 
+  const handleSummarize = async () => {
+    if (!selectedNews || isSummarizing) return;
+    setIsSummarizing(true);
+    try {
+      const summary = await summarizeNews(selectedNews.title, sessionSettings?.school_level || 'elementary');
+      setNewsSummary(summary);
+    } catch (e) { console.error(e); }
+    finally { setIsSummarizing(false); }
+  };
+
   const addAmount = (val: number) => setTransferAmount(p => p + val);
 
   const getNextUnlockTime = () => {
-    const lockedRecords = savings
-      .filter(s => s.account_type === 'bank')
-      .map(s => ({ ...s, unlockDate: new Date(new Date(s.created_at).getTime() + 7 * 24 * 60 * 60 * 1000) }))
-      .filter(s => s.unlockDate > new Date())
-      .sort((a, b) => a.unlockDate.getTime() - b.unlockDate.getTime());
-
+    const lockedRecords = savings.filter(s => s.account_type === 'bank').map(s => ({ ...s, unlockDate: new Date(new Date(s.created_at).getTime() + 7 * 24 * 60 * 60 * 1000) })).filter(s => s.unlockDate > new Date()).sort((a, b) => a.unlockDate.getTime() - b.unlockDate.getTime());
     if (lockedRecords.length === 0) return null;
-    
     const diff = lockedRecords[0].unlockDate.getTime() - new Date().getTime();
     const days = Math.floor(diff / (1000 * 60 * 60 * 24));
     const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-    
     if (days > 0) return `D-${days}`;
     return `${hours}h`;
   };
@@ -257,7 +267,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
         ))}
       </nav>
 
-      {/* 송금 탭 - 친구 이름 버튼 개선 */}
+      {/* 송금 탭 - 좌우 배치 레이아웃 */}
       {activeTab === 'transfer' && (
         <div className="bg-white p-6 md:p-8 rounded-3xl border shadow-sm space-y-6">
           <div className="text-center">
@@ -265,16 +275,16 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
             <p className="text-sm text-slate-400 mt-1">친구들을 선택하고 송금할 금액을 정하세요.</p>
           </div>
           
-          <div className="space-y-6">
-            <div className="space-y-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div className="space-y-4">
               <div className="flex justify-between items-center px-1">
                 <label className="text-xs font-bold text-slate-500">받는 사람 선택 (복수 선택 가능)</label>
                 <button onClick={() => setSelectedRecipientIds(selectedRecipientIds.length === friends.length + 1 ? [] : ['GOVERNMENT', ...friends.map(f => f.id)])} className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">전체 선택</button>
               </div>
-              <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-8 lg:grid-cols-10 gap-2 max-h-[250px] overflow-y-auto p-1 no-scrollbar bg-slate-50 rounded-2xl border border-dashed p-4">
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-4 gap-2 max-h-[400px] overflow-y-auto p-4 bg-slate-50 rounded-2xl border border-dashed no-scrollbar">
                 <button 
                   onClick={() => setSelectedRecipientIds(p => p.includes('GOVERNMENT') ? p.filter(id => id !== 'GOVERNMENT') : [...p, 'GOVERNMENT'])} 
-                  className={`py-2 px-1 rounded-lg border text-[10px] font-bold transition-all truncate ${selectedRecipientIds.includes('GOVERNMENT') ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-95' : 'bg-white text-slate-600 hover:border-indigo-200'}`}
+                  className={`py-3 px-1 rounded-xl border text-[11px] font-bold transition-all truncate ${selectedRecipientIds.includes('GOVERNMENT') ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-95' : 'bg-white text-slate-600 hover:border-indigo-200'}`}
                 >
                   정부
                 </button>
@@ -282,7 +292,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
                   <button 
                     key={f.id} 
                     onClick={() => setSelectedRecipientIds(p => p.includes(f.id) ? p.filter(id => id !== f.id) : [...p, f.id])} 
-                    className={`py-2 px-1 rounded-lg border text-[10px] font-bold transition-all truncate ${selectedRecipientIds.includes(f.id) ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-95' : 'bg-white text-slate-600 hover:border-indigo-200'}`}
+                    className={`py-3 px-1 rounded-xl border text-[11px] font-bold transition-all truncate ${selectedRecipientIds.includes(f.id) ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-95' : 'bg-white text-slate-600 hover:border-indigo-200'}`}
                   >
                     {f.name}
                   </button>
@@ -290,11 +300,11 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
               </div>
             </div>
 
-            <div className="max-w-md mx-auto space-y-6">
+            <div className="space-y-6 flex flex-col justify-center bg-slate-50/50 p-6 rounded-2xl border">
               <div className="space-y-2">
                 <label className="text-xs font-bold text-slate-500 ml-1">송금할 금액 (1인당 기준)</label>
                 <div className="relative">
-                  <input type="number" value={transferAmount} onChange={(e)=>setTransferAmount(Math.max(0, Number(e.target.value)))} className="w-full p-5 bg-slate-50 border rounded-2xl text-2xl font-black text-center outline-none focus:ring-2 focus:ring-indigo-600" />
+                  <input type="number" value={transferAmount} onChange={(e)=>setTransferAmount(Math.max(0, Number(e.target.value)))} className="w-full p-5 bg-white border rounded-2xl text-2xl font-black text-center outline-none focus:ring-2 focus:ring-indigo-600" />
                   <span className="absolute right-6 top-6 font-bold text-slate-400">원</span>
                 </div>
                 <div className="grid grid-cols-3 gap-2 mt-2">
@@ -305,11 +315,11 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
                 </div>
               </div>
 
-              <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100 flex flex-col gap-1">
-                <div className="flex justify-between text-sm font-bold text-indigo-900">
+              <div className="p-4 bg-white rounded-2xl border border-indigo-100 flex flex-col gap-1 shadow-sm">
+                <div className="flex justify-between text-sm font-bold text-slate-600">
                   <span>선택 인원</span> <span>{selectedRecipientIds.length}명</span>
                 </div>
-                <div className="flex justify-between text-lg font-black text-indigo-600 border-t border-indigo-100 pt-2 mt-1">
+                <div className="flex justify-between text-lg font-black text-indigo-600 border-t border-slate-100 pt-2 mt-1">
                   <span>총 송금액</span> <span>{(transferAmount * selectedRecipientIds.length).toLocaleString()}원</span>
                 </div>
               </div>
@@ -322,7 +332,150 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
         </div>
       )}
 
-      {/* 은행 저축 탭 - 선택 표시 보강 */}
+      {/* 증권 투자 탭 - 실시간 정보 및 뉴스 */}
+      {activeTab === 'invest' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* 좌측: 실시간 시세 */}
+            <div className="lg:col-span-2 space-y-6">
+              <div className="bg-white p-6 rounded-3xl border shadow-sm">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-black flex items-center gap-2"><TrendingUp className="text-indigo-600"/> 실시간 시장 정보</h3>
+                  <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400">
+                    <Clock size={12}/> 1시간 단위 자동 갱신
+                  </div>
+                </div>
+                
+                {isLoading && marketData.stocks.length === 0 ? (
+                  <div className="py-20 flex flex-col items-center justify-center gap-4">
+                    <div className="w-10 h-10 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin"></div>
+                    <p className="text-sm font-bold text-slate-400">구글 금융에서 정보를 가져오는 중...</p>
+                  </div>
+                ) : (
+                  <div className="space-y-8">
+                    <div>
+                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">주요 주식 종목</h4>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        {marketData.stocks.map((s, i) => {
+                          const isUp = s.change.includes('+') || !s.change.includes('-');
+                          return (
+                            <div key={i} className="p-4 bg-slate-50 rounded-2xl border hover:border-indigo-200 transition-all cursor-default">
+                              <p className="text-[10px] font-bold text-slate-400 mb-1">{s.name}</p>
+                              <p className="text-sm font-black text-slate-800">{s.price}</p>
+                              <p className={`text-[10px] font-bold mt-1 flex items-center gap-0.5 ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>
+                                {isUp ? <TrendingUp size={10}/> : <TrendingDown size={10}/>} {s.change}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">가상자산</h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        {marketData.coins.map((c, i) => {
+                          const isUp = c.change.includes('+') || !c.change.includes('-');
+                          return (
+                            <div key={i} className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100 hover:border-indigo-300 transition-all">
+                              <p className="text-[10px] font-bold text-indigo-400 mb-1">{c.name}</p>
+                              <p className="text-sm font-black text-slate-800">{c.price}</p>
+                              <p className={`text-[10px] font-bold mt-1 flex items-center gap-0.5 ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>
+                                {isUp ? <TrendingUp size={10}/> : <TrendingDown size={10}/>} {c.change}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 우측: 경제 뉴스 */}
+            <div className="space-y-6">
+              <div className="bg-white p-6 rounded-3xl border shadow-sm h-full">
+                <h3 className="text-xl font-black flex items-center gap-2 mb-6"><Newspaper className="text-amber-500"/> 오늘의 경제 뉴스</h3>
+                <div className="space-y-4">
+                  {economyNews.map((news, i) => (
+                    <button 
+                      key={i} 
+                      onClick={() => { setSelectedNews(news); setNewsSummary(''); }}
+                      className="w-full text-left p-4 rounded-2xl border border-transparent hover:border-amber-200 hover:bg-amber-50 transition-all group"
+                    >
+                      <h4 className="text-sm font-bold text-slate-800 leading-snug mb-2 group-hover:text-amber-900 line-clamp-2">{news.title}</h4>
+                      <div className="flex items-center text-[10px] font-bold text-slate-400 group-hover:text-amber-600">
+                        자세히 보기 <ChevronRight size={12}/>
+                      </div>
+                    </button>
+                  ))}
+                  {economyNews.length === 0 && !isLoading && (
+                    <div className="py-20 text-center text-slate-400">
+                      <p className="text-xs font-bold">최신 뉴스가 없습니다.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 뉴스 상세 모달 (요약 기능 포함) */}
+      {selectedNews && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-6 border-b flex justify-between items-start">
+              <h3 className="text-xl font-black text-slate-800 pr-8">{selectedNews.title}</h3>
+              <button onClick={() => setSelectedNews(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors shrink-0">
+                <X size={20}/>
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              <div className="flex gap-3">
+                <button 
+                  onClick={handleSummarize}
+                  disabled={isSummarizing}
+                  className="flex-1 bg-indigo-600 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all disabled:opacity-50"
+                >
+                  {isSummarizing ? (
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                  ) : (
+                    <Sparkles size={20}/>
+                  )}
+                  {isSummarizing ? 'AI 분석 중...' : 'AI 뉴스 요약 정리'}
+                </button>
+                <a 
+                  href={selectedNews.url} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="px-6 bg-slate-100 text-slate-700 py-4 rounded-2xl font-black flex items-center justify-center gap-2 hover:bg-slate-200 transition-all"
+                >
+                  <ExternalLink size={20}/> 원본 보기
+                </a>
+              </div>
+
+              {newsSummary && (
+                <div className="p-6 bg-indigo-50 rounded-3xl border border-indigo-100">
+                  <h4 className="text-xs font-black text-indigo-400 mb-3 flex items-center gap-2 uppercase tracking-widest">
+                    <Sparkles size={12}/> AI 요약 결과 ({sessionSettings?.school_level === 'elementary' ? '초등' : sessionSettings?.school_level === 'middle' ? '중등' : '고등'} 수준)
+                  </h4>
+                  <p className="text-slate-800 leading-relaxed font-medium whitespace-pre-wrap">{newsSummary}</p>
+                </div>
+              )}
+              
+              {!newsSummary && !isSummarizing && (
+                <div className="py-10 text-center text-slate-400">
+                  <p className="text-sm font-bold">위 버튼을 눌러 AI 요약본을 확인해보세요!</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 은행/증권 탭 (기존과 동일하되 증권은 락업 없음 문구 강화) */}
       {activeTab === 'bank' && (
         <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
           <div className="flex flex-col md:flex-row gap-8">
@@ -354,56 +507,12 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
                   {bankPath ? `${bankPath.from === 'balance' ? '입금' : '출금'} 실행하기` : '방향을 먼저 선택하세요'}
                 </button>
               </div>
-              <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 flex gap-3">
-                <Clock className="text-amber-600 shrink-0" size={18} />
-                <p className="text-[11px] text-amber-800 font-bold">은행 입금액은 이자 지급을 위해 <strong>7일(1주)</strong>의 출금 제한 기간이 있습니다.</p>
-              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* 증권 투자 탭 - 선택 표시 보강 및 락업 해제 */}
-      {activeTab === 'invest' && (
-        <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
-          <div className="flex flex-col md:flex-row gap-8">
-            <div className="flex-1 space-y-4">
-              <h3 className="text-lg font-bold flex items-center gap-2"><LineChart size={20} className="text-amber-500"/> 증권 계좌 이용하기</h3>
-              <div className="grid grid-cols-1 gap-3">
-                <button onClick={() => setInvestPath({from: 'balance', to: 'brokerage_balance'})} className={`p-5 border rounded-2xl text-left transition-all border-l-8 ${investPath?.from === 'balance' ? 'bg-amber-50 border-amber-600 shadow-md ring-2 ring-amber-200 scale-102 border-l-amber-600' : 'bg-white hover:bg-slate-50 border-l-indigo-400'}`}>
-                  <p className="font-bold text-slate-800">현금 → 증권 (예수금 확보)</p>
-                  <p className="text-[11px] text-slate-400 mt-1">투자를 위한 총알을 준비합니다. (즉시 출금 가능)</p>
-                </button>
-                <button onClick={() => setInvestPath({from: 'brokerage_balance', to: 'balance'})} className={`p-5 border rounded-2xl text-left transition-all border-l-8 ${investPath?.from === 'brokerage_balance' ? 'bg-amber-50 border-amber-600 shadow-md ring-2 ring-amber-200 scale-102 border-l-amber-600' : 'bg-white hover:bg-slate-50 border-l-amber-400'}`}>
-                  <p className="font-bold text-slate-800">증권 → 현금 (예수금 회수)</p>
-                  <p className="text-[11px] text-slate-400 mt-1">투자 자금을 다시 현금으로 가져옵니다.</p>
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 space-y-6">
-              <h3 className="text-lg font-bold">이체 실행</h3>
-              <div className="space-y-4 p-6 bg-slate-50 rounded-3xl border border-dashed">
-                <div className="space-y-2">
-                  <input type="number" value={transferAmount} onChange={(e)=>setTransferAmount(Math.max(0, Number(e.target.value)))} className="w-full bg-white p-4 rounded-2xl text-2xl font-black text-center outline-none border focus:ring-2 focus:ring-amber-600" placeholder="금액 입력" />
-                  <div className="grid grid-cols-3 gap-2 mt-2">
-                    {[50000, 10000, 5000].map(val => (
-                      <button key={val} onClick={() => addAmount(val)} className="py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-500 hover:bg-slate-50 transition-all">+{val.toLocaleString()}</button>
-                    ))}
-                  </div>
-                </div>
-                <button onClick={() => investPath ? handleAssetTransfer(investPath.from, investPath.to) : alert('이체 방향을 선택해주세요.')} className={`w-full py-4 rounded-2xl font-black shadow-lg transition-all ${investPath ? 'bg-amber-500 text-white hover:bg-amber-600 active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
-                  {investPath ? `${investPath.from === 'balance' ? '확보' : '회수'} 실행하기` : '방향을 먼저 선택하세요'}
-                </button>
-              </div>
-              <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 flex gap-3">
-                <CheckCircle2 className="text-indigo-600 shrink-0" size={18} />
-                <p className="text-[11px] text-indigo-800 font-bold">증권 계좌는 실시간 거래를 위해 <strong>별도의 출금 제한(락업)이 없습니다.</strong></p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
+      {/* 일일 퀴즈 탭 */}
       {activeTab === 'quiz' && (
         <div className="space-y-4">
           <div className="bg-indigo-600 text-white p-6 rounded-2xl shadow-lg relative overflow-hidden">
@@ -436,12 +545,6 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
                 </div>
               );
             })}
-            {dailyQuizzes.length === 0 && (
-              <div className="bg-white p-20 rounded-2xl border border-dashed flex flex-col items-center justify-center text-slate-400 gap-3">
-                <HelpCircle size={40} className="opacity-20" />
-                <p className="font-bold">오늘 준비된 퀴즈가 없습니다.</p>
-              </div>
-            )}
           </div>
         </div>
       )}

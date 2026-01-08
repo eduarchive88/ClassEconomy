@@ -4,11 +4,11 @@ import {
   Users, Landmark, ShoppingBag, BookOpen, Settings,
   Map, Download, Plus, RefreshCw, Trash2, Check, X, 
   Coins, Megaphone, CheckSquare, Square, History, Save, AlertTriangle,
-  UserPlus, FileSpreadsheet, HelpCircle
+  UserPlus, FileSpreadsheet, HelpCircle, GraduationCap
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../services/supabaseClient';
-import { EconomySettings, Student, Transaction, Quiz } from '../types';
+import { EconomySettings, Student, Transaction, Quiz, SchoolLevel } from '../types';
 
 interface Props {
   teacherId: string;
@@ -136,7 +136,6 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
       return;
     }
     
-    // session_code를 명시적으로 포함하여 전송
     const quizToInsert = {
       question: newQuiz.question,
       options: [newQuiz.o1, newQuiz.o2, newQuiz.o3, newQuiz.o4],
@@ -352,6 +351,43 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
                 </div>
               ))}
               {quizzes.length === 0 && <p className="text-center py-20 text-slate-400">등록된 퀴즈가 없습니다. 엑셀로 업로드해주세요.</p>}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'settings' && (
+          <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-6">
+            <h2 className="text-xl font-bold flex items-center gap-2"><Settings size={20}/> 환경 설정</h2>
+            
+            <div className="space-y-4">
+              <div className="p-5 bg-indigo-50 rounded-2xl border border-indigo-100 space-y-4">
+                <h3 className="font-bold text-indigo-800 flex items-center gap-2"><GraduationCap size={16}/> 학생 수준 설정</h3>
+                <p className="text-xs text-indigo-600">AI가 뉴스 요약이나 퀴즈를 생성할 때 참고하는 학생들의 연령대입니다.</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['elementary', 'middle', 'high'] as SchoolLevel[]).map(level => (
+                    <button 
+                      key={level} 
+                      onClick={() => updateSessionSetting({ school_level: level })}
+                      className={`py-3 px-4 rounded-xl text-sm font-bold border transition-all ${settings.school_level === level ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-600 hover:border-indigo-200'}`}
+                    >
+                      {level === 'elementary' ? '초등학생' : level === 'middle' ? '중학생' : '고등학생'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="p-5 bg-slate-50 rounded-2xl border border-slate-200 flex justify-between items-center">
+                <div>
+                  <h3 className="font-bold text-slate-800">부동산 자동 승인</h3>
+                  <p className="text-[10px] text-slate-500">활성화 시 학생들이 부동산 구매를 신청하면 즉시 소유권이 이전됩니다.</p>
+                </div>
+                <button 
+                  onClick={() => updateSessionSetting({ auto_approve_estate: !settings.auto_approve_estate })}
+                  className={`w-12 h-6 rounded-full transition-all relative ${settings.auto_approve_estate ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                >
+                  <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${settings.auto_approve_estate ? 'right-1' : 'left-1'}`}></div>
+                </button>
+              </div>
             </div>
           </div>
         )}
