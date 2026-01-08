@@ -3,25 +3,29 @@ export type UserRole = 'teacher' | 'student';
 export type SchoolLevel = 'elementary' | 'middle' | 'high';
 
 export interface Student {
-  id: string; // 학번
+  id: string; // 학번 (예: 20101)
   name: string;
   grade: string;
   class: string;
   number: string;
   password?: string;
   salary: number; // 주급
-  balance: number; // 현금 (입출금통장)
-  bankBalance: number; // 은행 저축 (이자 발생)
-  brokerageBalance: number; // 증권 예수금 (투자용)
-  teacherId: string;
+  balance: number; // 입출금통장 (현금)
+  bank_balance: number; // 은행 저축 (이자 발생)
+  brokerage_balance: number; // 증권 예수금 (투자용)
+  teacher_id: string;
+  last_salary_date?: string;
+  last_quiz_date?: string;
 }
 
 export interface Quiz {
   id: string;
   question: string;
   options: [string, string, string, string];
-  answer: number; // 1-4 (엑셀 정답 기준)
+  answer: number; // 0-3
   reward: number;
+  teacher_id: string;
+  created_at?: string;
 }
 
 export interface StockInfo {
@@ -36,26 +40,23 @@ export interface MarketItem {
   id: string;
   name: string;
   price: number;
+  teacher_id: string;
 }
 
 export interface Seat {
   id: number;
-  ownerId?: string;
-  ownerName?: string;
+  owner_id?: string;
+  owner_name?: string;
   status: 'available' | 'pending' | 'sold';
-  pendingBuyerId?: string;
+  pending_buyer_id?: string;
+  teacher_id: string;
 }
 
-export interface NewsArticle {
-  title: string;
-  url: string;
-  summary?: string;
-  publishedAt: string;
-}
-
-export interface EconomyState {
-  sessionCode: string;
-  schoolLevel: SchoolLevel;
-  autoApproveRealEstate: boolean;
-  quizCountPerDay: number;
+export interface EconomySettings {
+  teacher_id: string;
+  session_code: string;
+  school_level: SchoolLevel;
+  auto_approve_estate: boolean;
+  quiz_count_per_day: number;
+  gemini_api_key?: string;
 }
