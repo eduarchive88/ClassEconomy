@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { ArrowLeft, Database, Cloud, Chrome, CheckCircle2, AlertCircle, PlayCircle } from 'lucide-react';
+import { ArrowLeft, PlayCircle, AlertCircle } from 'lucide-react';
 
 interface Props {
   onBack: () => void;
@@ -32,7 +32,7 @@ const SetupGuide: React.FC<Props> = ({ onBack }) => {
               <div>
                 <p className="font-bold text-slate-800">Supabase - Google 활성화</p>
                 <p className="text-sm text-slate-500 mt-1">
-                  Auth > Providers > Google 메뉴에서 구글 콘솔의 <strong>ID와 Secret</strong>을 넣고 활성화했나요?
+                  Auth &gt; Providers &gt; Google 메뉴에서 구글 콘솔의 <strong>ID와 Secret</strong>을 넣고 활성화했나요?
                 </p>
               </div>
             </div>
@@ -65,7 +65,7 @@ const SetupGuide: React.FC<Props> = ({ onBack }) => {
             <AlertCircle size={20}/> 알아두세요!
           </div>
           <ul className="list-disc ml-5 space-y-2 text-amber-800 text-sm leading-relaxed">
-            <li>구글 로그인을 누르면 처음에 <strong>'구글에서 확인하지 않은 앱'</strong>이라고 뜰 수 있습니다. <br/>(심사 전이라 뜨는 것이니 '고급' -> 'ClassEconomy(으)로 이동'을 누르시면 됩니다.)</li>
+            <li>구글 로그인을 누르면 처음에 <strong>'구글에서 확인하지 않은 앱'</strong>이라고 뜰 수 있습니다. <br/>(심사 전이라 뜨는 것이니 '고급' -&gt; 'ClassEconomy(으)로 이동'을 누르시면 됩니다.)</li>
             <li>로그인 후 흰 화면만 나온다면 Vercel 환경 변수가 등록되지 않았을 확률이 높습니다.</li>
           </ul>
         </section>
