@@ -132,19 +132,24 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
       alert('문제와 보기를 입력해주세요.');
       return;
     }
-    const { error } = await supabase.from('quizzes').insert({
+    
+    // session_code 컬럼 부재 시를 대비해 데이터 구조를 다시 한번 검증
+    const quizToInsert = {
       question: newQuiz.question,
       options: [newQuiz.o1, newQuiz.o2, newQuiz.o3, newQuiz.o4],
       answer: newQuiz.ans,
       reward: newQuiz.reward,
       teacher_id: teacherId,
       session_code: activeSession.session_code
-    });
+    };
+
+    const { error } = await supabase.from('quizzes').insert(quizToInsert);
 
     if (error) {
-      alert(`저장 중 오류가 발생했습니다: ${error.message}`);
+      console.error("Quiz Insert Error:", error);
+      alert(`퀴즈 저장 중 오류가 발생했습니다: ${error.message}\n(DB에 'session_code' 컬럼이 있는지 확인이 필요할 수 있습니다.)`);
     } else {
-      alert('퀴즈가 추가되었습니다.');
+      alert('퀴즈가 성공적으로 추가되었습니다.');
       setShowQuizAddModal(false);
       setNewQuiz({ question: '', o1: '', o2: '', o3: '', o4: '', ans: 1, reward: 1000 });
       fetchData();
