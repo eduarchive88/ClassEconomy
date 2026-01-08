@@ -3,7 +3,6 @@ import { GoogleGenAI, Type } from "@google/genai";
 
 export const generateAIQuiz = async (topic: string, count: number, schoolLevel: string) => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
     contents: `Topic: ${topic}. Level: ${schoolLevel}. Generate ${count} multiple choice quizzes.`,
@@ -24,7 +23,6 @@ export const generateAIQuiz = async (topic: string, count: number, schoolLevel: 
       }
     }
   });
-  
   const text = response.text;
   if (!text) return [];
   return JSON.parse(text.trim());
@@ -32,7 +30,6 @@ export const generateAIQuiz = async (topic: string, count: number, schoolLevel: 
 
 export const summarizeNews = async (content: string, schoolLevel: string) => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: `다음 경제 뉴스 기사를 ${schoolLevel} 수준에 맞춰서 쉽고 명확하게 요약해줘: ${content}. 학생이 경제 개념을 이해하기 좋게 설명해줘.`,
@@ -47,10 +44,10 @@ export const getMarketData = async () => {
   
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: `구글 금융(Google Finance)의 최신 정보를 바탕으로 다음 종목들의 현재가(KRW 또는 USD)와 등락률을 JSON 형식으로 알려줘.
+    contents: `지금 즉시 구글 금융(Google Finance)에 접속하여 다음 종목들의 가장 최신 현재가와 오늘 전일대비 등락률(%)을 확인해서 JSON으로 출력해줘.
     주식: ${stocks}
     코인: ${coins}
-    응답은 반드시 { "stocks": [{ "name": string, "price": string, "change": string }], "coins": [...] } 형식을 지켜줘.`,
+    정확한 가격 데이터를 가져와야 해. 응답 형식: { "stocks": [{ "name": string, "price": string, "change": string }], "coins": [...] }`,
     config: {
       tools: [{ googleSearch: {} }],
       responseMimeType: "application/json",
@@ -84,14 +81,18 @@ export const getMarketData = async () => {
     }
   });
 
-  return JSON.parse(response.text || "{}");
+  try {
+    return JSON.parse(response.text || "{\"stocks\": [], \"coins\": []}");
+  } catch (e) {
+    return { stocks: [], coins: [] };
+  }
 };
 
 export const getEconomyNews = async () => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: "구글 뉴스에서 가장 최신의 주요 경제 및 금융 뉴스 5개를 알려줘. 뉴스 제목과 원문 링크(URL)가 포함된 JSON 배열로 응답해줘. [{ 'title': string, 'url': string }]",
+    contents: "지금 구글 뉴스(news.google.com)의 경제/금융 섹션에서 가장 중요한 뉴스 5개를 실시간으로 검색해서 알려줘. JSON 배열 형식: [{ 'title': string, 'url': string }]",
     config: {
       tools: [{ googleSearch: {} }],
       responseMimeType: "application/json",
@@ -108,5 +109,9 @@ export const getEconomyNews = async () => {
     }
   });
   
-  return JSON.parse(response.text || "[]");
+  try {
+    return JSON.parse(response.text || "[]");
+  } catch (e) {
+    return [];
+  }
 };

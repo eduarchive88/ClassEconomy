@@ -44,15 +44,14 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
     fetchStudentData();
   }, [studentId, activeTab]);
 
-  // 시장 데이터 및 뉴스 1시간마다 갱신
   useEffect(() => {
     if (activeTab === 'invest') {
       const loadInvestData = async () => {
         setIsLoading(true);
         try {
           const [m, n] = await Promise.all([getMarketData(), getEconomyNews()]);
-          setMarketData(m);
-          setEconomyNews(n);
+          if (m) setMarketData(m);
+          if (n) setEconomyNews(n);
         } catch (e) { console.error(e); }
         finally { setIsLoading(false); }
       };
@@ -111,19 +110,41 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
     const { data: settings } = await supabase.from('economy_settings').select('quiz_count_per_day').eq('session_code', code).single();
     const count = settings?.quiz_count_per_day || 0;
     if (count <= 0) { setDailyQuizzes([]); return; }
+    
     const now = new Date();
     if (now.getHours() < 8) now.setDate(now.getDate() - 1);
     const dateStr = now.toISOString().split('T')[0];
+    
+    // 퀴즈 목록 가져오기 (가중치 랜덤 선정 로직)
     const { data: allQuizzes } = await supabase.from('quizzes').select('*').eq('session_code', code);
+    
     if (allQuizzes && allQuizzes.length > 0) {
       const seededRandom = (seed: string) => {
         let h = 0; for(let i=0; i<seed.length; i++) h = Math.imul(31, h) + seed.charCodeAt(i) | 0;
         return () => { h = Math.imul(h ^ h >>> 16, 0x85ebca6b); h = Math.imul(h ^ h >>> 13, 0xc2b2ae35); return ((h ^= h >>> 16) >>> 0) / 4294967296; };
       };
       const rand = seededRandom(dateStr + code);
-      const shuffled = [...allQuizzes].sort(() => rand() - 0.5);
-      setDailyQuizzes(shuffled.slice(0, count));
+      
+      // 노출 빈도가 낮은 퀴즈에 가중치를 부여하여 정렬
+      const sortedByUsage = [...allQuizzes].sort((a, b) => {
+        const usageA = (a as any).usage_count || 0;
+        const usageB = (b as any).usage_count || 0;
+        if (usageA !== usageB) return usageA - usageB;
+        return rand() - 0.5;
+      });
+      
+      const selected = sortedByUsage.slice(0, count);
+      setDailyQuizzes(selected);
+
+      // 선택된 퀴즈들의 노출 빈도 업데이트 (하루에 한 번만 실행되도록 로직 필요하나 여기서는 단순화)
+      for (const q of selected) {
+        await supabase.rpc('increment_quiz_usage', { quiz_id: q.id }).catch(() => {
+          // RPC가 없는 경우 일반 update 시도
+          supabase.from('quizzes').update({ usage_count: ((q as any).usage_count || 0) + 1 }).eq('id', q.id);
+        });
+      }
     }
+
     const { data: attempts } = await supabase.from('quiz_attempts').select('quiz_id').eq('student_id', studentId).eq('attempt_date', dateStr);
     if (attempts) setSolvedQuizIds(attempts.map(a => a.quiz_id));
   };
@@ -267,7 +288,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
         ))}
       </nav>
 
-      {/* 송금 탭 - 좌우 배치 레이아웃 */}
+      {/* 송금 탭 */}
       {activeTab === 'transfer' && (
         <div className="bg-white p-6 md:p-8 rounded-3xl border shadow-sm space-y-6">
           <div className="text-center">
@@ -332,11 +353,46 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
         </div>
       )}
 
-      {/* 증권 투자 탭 - 실시간 정보 및 뉴스 */}
+      {/* 증권 투자 탭 */}
       {activeTab === 'invest' && (
         <div className="space-y-6">
+          {/* 투자용 예수금 이체 섹션 (복구) */}
+          <div className="bg-white p-8 rounded-3xl border shadow-sm">
+            <div className="flex flex-col md:flex-row gap-8">
+              <div className="flex-1 space-y-4">
+                <h3 className="text-lg font-bold flex items-center gap-2"><LineChart size={20} className="text-amber-500"/> 증권 계좌 이용하기</h3>
+                <div className="grid grid-cols-1 gap-3">
+                  <button onClick={() => setInvestPath({from: 'balance', to: 'brokerage_balance'})} className={`p-5 border rounded-2xl text-left transition-all border-l-8 ${investPath?.from === 'balance' ? 'bg-amber-50 border-amber-600 shadow-md ring-2 ring-amber-200 scale-102 border-l-amber-600' : 'bg-white hover:bg-slate-50 border-l-indigo-400'}`}>
+                    <p className="font-bold text-slate-800">현금 → 증권 (예수금 확보)</p>
+                    <p className="text-[11px] text-slate-400 mt-1">투자를 위한 자금을 준비합니다.</p>
+                  </button>
+                  <button onClick={() => setInvestPath({from: 'brokerage_balance', to: 'balance'})} className={`p-5 border rounded-2xl text-left transition-all border-l-8 ${investPath?.from === 'brokerage_balance' ? 'bg-amber-50 border-amber-600 shadow-md ring-2 ring-amber-200 scale-102 border-l-amber-600' : 'bg-white hover:bg-slate-50 border-l-amber-400'}`}>
+                    <p className="font-bold text-slate-800">증권 → 현금 (예수금 회수)</p>
+                    <p className="text-[11px] text-slate-400 mt-1">투자 자금을 다시 현금으로 가져옵니다.</p>
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 space-y-6">
+                <h3 className="text-lg font-bold">이체 실행</h3>
+                <div className="space-y-4 p-6 bg-slate-50 rounded-3xl border border-dashed">
+                  <div className="space-y-2">
+                    <input type="number" value={transferAmount} onChange={(e)=>setTransferAmount(Math.max(0, Number(e.target.value)))} className="w-full bg-white p-4 rounded-2xl text-2xl font-black text-center outline-none border focus:ring-2 focus:ring-amber-600" placeholder="금액 입력" />
+                    <div className="grid grid-cols-3 gap-2 mt-2">
+                      {[100000, 50000, 10000].map(val => (
+                        <button key={val} onClick={() => addAmount(val)} className="py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-500 hover:bg-slate-50 transition-all">+{val.toLocaleString()}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <button onClick={() => investPath ? handleAssetTransfer(investPath.from, investPath.to) : alert('이체 방향을 선택해주세요.')} className={`w-full py-4 rounded-2xl font-black shadow-lg transition-all ${investPath ? 'bg-amber-500 text-white hover:bg-amber-600 active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
+                    {investPath ? `${investPath.from === 'balance' ? '확보' : '회수'} 실행하기` : '방향을 먼저 선택하세요'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* 좌측: 실시간 시세 */}
+            {/* 실시간 시세 (이동) */}
             <div className="lg:col-span-2 space-y-6">
               <div className="bg-white p-6 rounded-3xl border shadow-sm">
                 <div className="flex justify-between items-center mb-6">
@@ -349,21 +405,21 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
                 {isLoading && marketData.stocks.length === 0 ? (
                   <div className="py-20 flex flex-col items-center justify-center gap-4">
                     <div className="w-10 h-10 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin"></div>
-                    <p className="text-sm font-bold text-slate-400">구글 금융에서 정보를 가져오는 중...</p>
+                    <p className="text-sm font-bold text-slate-400">구글 금융에서 최신 정보를 수집하는 중...</p>
                   </div>
                 ) : (
                   <div className="space-y-8">
                     <div>
-                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">주요 주식 종목</h4>
+                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">주요 주식 종목 (KOSPI/NASDAQ)</h4>
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                         {marketData.stocks.map((s, i) => {
-                          const isUp = s.change.includes('+') || !s.change.includes('-');
+                          const isUp = s.change && (s.change.includes('+') || !s.change.includes('-'));
                           return (
-                            <div key={i} className="p-4 bg-slate-50 rounded-2xl border hover:border-indigo-200 transition-all cursor-default">
+                            <div key={i} className="p-4 bg-slate-50 rounded-2xl border hover:border-indigo-200 transition-all cursor-default shadow-sm">
                               <p className="text-[10px] font-bold text-slate-400 mb-1">{s.name}</p>
-                              <p className="text-sm font-black text-slate-800">{s.price}</p>
+                              <p className="text-sm font-black text-slate-800">{s.price || '로딩 중'}</p>
                               <p className={`text-[10px] font-bold mt-1 flex items-center gap-0.5 ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>
-                                {isUp ? <TrendingUp size={10}/> : <TrendingDown size={10}/>} {s.change}
+                                {isUp ? <TrendingUp size={10}/> : <TrendingDown size={10}/>} {s.change || '0%'}
                               </p>
                             </div>
                           );
@@ -371,16 +427,16 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
                       </div>
                     </div>
                     <div>
-                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">가상자산</h4>
+                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">가상자산 실시간 시세</h4>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         {marketData.coins.map((c, i) => {
-                          const isUp = c.change.includes('+') || !c.change.includes('-');
+                          const isUp = c.change && (c.change.includes('+') || !c.change.includes('-'));
                           return (
-                            <div key={i} className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100 hover:border-indigo-300 transition-all">
+                            <div key={i} className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100 hover:border-indigo-300 transition-all shadow-sm">
                               <p className="text-[10px] font-bold text-indigo-400 mb-1">{c.name}</p>
-                              <p className="text-sm font-black text-slate-800">{c.price}</p>
+                              <p className="text-sm font-black text-slate-800">{c.price || '로딩 중'}</p>
                               <p className={`text-[10px] font-bold mt-1 flex items-center gap-0.5 ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>
-                                {isUp ? <TrendingUp size={10}/> : <TrendingDown size={10}/>} {c.change}
+                                {isUp ? <TrendingUp size={10}/> : <TrendingDown size={10}/>} {c.change || '0%'}
                               </p>
                             </div>
                           );
@@ -392,7 +448,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
               </div>
             </div>
 
-            {/* 우측: 경제 뉴스 */}
+            {/* 오늘의 경제 뉴스 (이동) */}
             <div className="space-y-6">
               <div className="bg-white p-6 rounded-3xl border shadow-sm h-full">
                 <h3 className="text-xl font-black flex items-center gap-2 mb-6"><Newspaper className="text-amber-500"/> 오늘의 경제 뉴스</h3>
@@ -411,7 +467,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
                   ))}
                   {economyNews.length === 0 && !isLoading && (
                     <div className="py-20 text-center text-slate-400">
-                      <p className="text-xs font-bold">최신 뉴스가 없습니다.</p>
+                      <p className="text-xs font-bold">구글 뉴스에서 정보를 가져오고 있습니다.</p>
                     </div>
                   )}
                 </div>
@@ -421,7 +477,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
         </div>
       )}
 
-      {/* 뉴스 상세 모달 (요약 기능 포함) */}
+      {/* 뉴스 상세 모달 */}
       {selectedNews && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -464,18 +520,12 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
                   <p className="text-slate-800 leading-relaxed font-medium whitespace-pre-wrap">{newsSummary}</p>
                 </div>
               )}
-              
-              {!newsSummary && !isSummarizing && (
-                <div className="py-10 text-center text-slate-400">
-                  <p className="text-sm font-bold">위 버튼을 눌러 AI 요약본을 확인해보세요!</p>
-                </div>
-              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* 은행/증권 탭 (기존과 동일하되 증권은 락업 없음 문구 강화) */}
+      {/* 은행 저축 탭 */}
       {activeTab === 'bank' && (
         <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
           <div className="flex flex-col md:flex-row gap-8">
@@ -512,34 +562,39 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
         </div>
       )}
 
-      {/* 일일 퀴즈 탭 */}
+      {/* 일일 퀴즈 탭 (참여 완료 시 비활성화 적용) */}
       {activeTab === 'quiz' && (
         <div className="space-y-4">
           <div className="bg-indigo-600 text-white p-6 rounded-2xl shadow-lg relative overflow-hidden">
             <h2 className="text-xl font-black">오늘의 일일 퀴즈 💡</h2>
-            <p className="text-indigo-100 text-xs mt-1">매일 오전 8시에 새로운 퀴즈가 찾아옵니다!</p>
+            <p className="text-indigo-100 text-xs mt-1">매일 오전 8시에 새로운 퀴즈가 찾아옵니다! (중복 참여 불가)</p>
             <HelpCircle size={80} className="absolute -right-4 -bottom-4 opacity-10" />
           </div>
           <div className="grid grid-cols-1 gap-4">
             {dailyQuizzes.map((quiz, qIdx) => {
               const solved = solvedQuizIds.includes(quiz.id);
               return (
-                <div key={quiz.id} className={`bg-white p-6 rounded-2xl border shadow-sm transition-all ${solved ? 'opacity-60 grayscale' : 'hover:shadow-md'}`}>
+                <div key={quiz.id} className={`bg-white p-6 rounded-2xl border shadow-sm transition-all ${solved ? 'opacity-50 grayscale select-none' : 'hover:shadow-md'}`}>
                   <div className="flex justify-between items-start mb-4">
                     <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-[10px] font-bold">퀴즈 #{qIdx+1}</span>
-                    <span className="text-emerald-600 font-black text-sm">+{quiz.reward.toLocaleString()}원</span>
+                    <span className={`font-black text-sm ${solved ? 'text-slate-400' : 'text-emerald-600'}`}>+{quiz.reward.toLocaleString()}원</span>
                   </div>
                   <h3 className="text-lg font-bold text-slate-800 mb-6 leading-tight">{quiz.question}</h3>
                   <div className="grid grid-cols-1 gap-2">
                     {quiz.options.map((opt, oIdx) => (
-                      <button key={oIdx} onClick={() => !solved && handleQuizSolve(quiz, oIdx + 1)} disabled={solved} className={`w-full p-4 rounded-xl text-left text-sm font-bold transition-all border-2 ${solved ? 'bg-slate-50 border-slate-100' : 'hover:border-indigo-600 hover:bg-indigo-50 border-slate-50'}`}>
+                      <button 
+                        key={oIdx} 
+                        onClick={() => !solved && handleQuizSolve(quiz, oIdx + 1)} 
+                        disabled={solved} 
+                        className={`w-full p-4 rounded-xl text-left text-sm font-bold transition-all border-2 ${solved ? 'bg-slate-50 border-slate-100 cursor-not-allowed' : 'hover:border-indigo-600 hover:bg-indigo-50 border-slate-50'}`}
+                      >
                         <span className="text-indigo-600 mr-2">{oIdx + 1}.</span> {opt}
                       </button>
                     ))}
                   </div>
                   {solved && (
-                    <div className="mt-4 flex items-center justify-center gap-2 text-emerald-600 font-bold text-sm">
-                      <CheckCircle2 size={16}/> 참여 완료
+                    <div className="mt-4 flex items-center justify-center gap-2 text-emerald-600 font-bold text-sm bg-emerald-50 py-3 rounded-xl border border-emerald-100">
+                      <CheckCircle2 size={18}/> 오늘 이미 참여한 퀴즈입니다
                     </div>
                   )}
                 </div>

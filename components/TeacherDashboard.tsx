@@ -4,16 +4,13 @@ import {
   Users, Landmark, ShoppingBag, BookOpen, Settings,
   Map, Download, Plus, RefreshCw, Trash2, Check, X, 
   Coins, Megaphone, CheckSquare, Square, History, Save, AlertTriangle,
-  UserPlus, FileSpreadsheet, HelpCircle, GraduationCap
+  UserPlus, FileSpreadsheet, HelpCircle, GraduationCap, Eye
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../services/supabaseClient';
 import { EconomySettings, Student, Transaction, Quiz, SchoolLevel } from '../types';
 
-interface Props {
-  teacherId: string;
-  activeSession: EconomySettings;
-}
+interface Props { teacherId: string; activeSession: EconomySettings; }
 
 const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('teacher_active_tab') || 'students');
@@ -30,15 +27,9 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
 
   // 학생 추가 모달 상태
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newStudent, setNewStudent] = useState({ grade: '', class: '', number: '', name: '' });
 
-  useEffect(() => {
-    localStorage.setItem('teacher_active_tab', activeTab);
-  }, [activeTab]);
-
-  useEffect(() => {
-    fetchData();
-  }, [activeSession.session_code, activeTab]);
+  useEffect(() => { localStorage.setItem('teacher_active_tab', activeTab); }, [activeTab]);
+  useEffect(() => { fetchData(); }, [activeSession.session_code, activeTab]);
 
   const fetchData = async () => {
     const code = activeSession.session_code;
@@ -51,7 +42,7 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
       const { data } = await query;
       if (data) setLogs(data);
     } else if (activeTab === 'quiz') {
-      const { data } = await supabase.from('quizzes').select('*').eq('session_code', code);
+      const { data } = await supabase.from('quizzes').select('*').eq('session_code', code).order('usage_count', { ascending: true });
       if (data) setQuizzes(data);
     }
   };
@@ -72,24 +63,13 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
       const data = new Uint8Array(evt.target?.result as ArrayBuffer);
       const workbook = XLSX.read(data, { type: 'array' });
       const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 }) as any[];
-      
-      const quizData = rows.slice(1)
-        .filter(row => row[0])
-        .map(row => ({
-          question: String(row[0]),
-          options: [String(row[1]), String(row[2]), String(row[3]), String(row[4])],
-          answer: Number(row[5]),
-          reward: Number(row[6] || 1000),
-          teacher_id: teacherId,
-          session_code: activeSession.session_code
-        }));
-
+      const quizData = rows.slice(1).filter(row => row[0]).map(row => ({
+        question: String(row[0]), options: [String(row[1]), String(row[2]), String(row[3]), String(row[4])],
+        answer: Number(row[5]), reward: Number(row[6] || 1000), teacher_id: teacherId, session_code: activeSession.session_code
+      }));
       if (quizData.length > 0) {
         const { error } = await supabase.from('quizzes').insert(quizData);
-        if (error) {
-           console.error("Bulk Quiz Insert Error:", error);
-           alert(`퀴즈 업로드 중 오류가 발생했습니다: ${error.message}\n(DB에 'session_code' 컬럼이 없는 경우 Supabase SQL Editor에서 alter table quizzes add column session_code text; 를 실행해야 할 수 있습니다.)`);
-        }
+        if (error) alert(`오류: ${error.message}`);
         else { alert(`${quizData.length}개의 퀴즈가 등록되었습니다.`); fetchData(); }
       }
     };
@@ -99,63 +79,35 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
   const handleMassTransaction = async (amount: number, isTax: boolean, targetIds?: string[]) => {
     const targets = targetIds ? students.filter(s => targetIds.includes(s.id)) : students;
     if (targets.length === 0 || amount <= 0) return;
-
     const label = isTax ? (targetIds ? '범칙금 부과' : '세금 징수') : '수당 지급';
     if (!confirm(`${label}를 진행할까요? 대상: ${targets.length}명, 금액: ${amount}원`)) return;
-
     for (const s of targets) {
       const newBalance = isTax ? s.balance - amount : s.balance + amount;
       await supabase.from('students').update({ balance: Math.max(0, newBalance) }).eq('id', s.id);
       await supabase.from('transactions').insert({
-        session_code: s.session_code,
-        sender_id: isTax ? s.id : 'GOVERNMENT',
-        sender_name: isTax ? s.name : '정부',
-        receiver_id: isTax ? 'GOVERNMENT' : s.id,
-        receiver_name: isTax ? '정부' : s.name,
-        amount, type: isTax ? (targetIds ? 'fine' : 'tax') : 'reward',
-        description: isTax ? (targetIds ? '범칙금 부과' : '세금 징수') : '수당 지급'
+        session_code: s.session_code, sender_id: isTax ? s.id : 'GOVERNMENT', sender_name: isTax ? s.name : '정부',
+        receiver_id: isTax ? 'GOVERNMENT' : s.id, receiver_name: isTax ? '정부' : s.name,
+        amount, type: isTax ? (targetIds ? 'fine' : 'tax') : 'reward', description: isTax ? (targetIds ? '범칙금 부과' : '세금 징수') : '수당 지급'
       });
     }
-    alert('완료되었습니다.');
-    setSelectedStudentIds([]);
-    fetchData();
+    alert('완료되었습니다.'); setSelectedStudentIds([]); fetchData();
   };
 
   const updateSessionSetting = async (updates: Partial<EconomySettings>) => {
     const { data, error } = await supabase.from('economy_settings').update(updates).eq('id', settings.id).select().single();
-    if (data) {
-      setSettings(data);
-      alert('설정이 저장되었습니다.');
-    }
+    if (data) { setSettings(data); alert('설정이 저장되었습니다.'); }
     if (error) alert('저장 중 오류가 발생했습니다.');
   };
 
   const handleIndividualQuizAdd = async () => {
-    if (!newQuiz.question || !newQuiz.o1 || !newQuiz.o2) {
-      alert('문제와 보기를 입력해주세요.');
-      return;
-    }
-    
+    if (!newQuiz.question || !newQuiz.o1 || !newQuiz.o2) { alert('문제와 보기를 입력해주세요.'); return; }
     const quizToInsert = {
-      question: newQuiz.question,
-      options: [newQuiz.o1, newQuiz.o2, newQuiz.o3, newQuiz.o4],
-      answer: newQuiz.ans,
-      reward: newQuiz.reward,
-      teacher_id: teacherId,
-      session_code: activeSession.session_code
+      question: newQuiz.question, options: [newQuiz.o1, newQuiz.o2, newQuiz.o3, newQuiz.o4],
+      answer: newQuiz.ans, reward: newQuiz.reward, teacher_id: teacherId, session_code: activeSession.session_code
     };
-
     const { error } = await supabase.from('quizzes').insert(quizToInsert);
-
-    if (error) {
-      console.error("Quiz Insert Error:", error);
-      alert(`퀴즈 저장 중 오류가 발생했습니다: ${error.message}\n에러 메시지에 'column session_code not found'가 포함되어 있다면 DB 테이블 구조 업데이트가 필요합니다.`);
-    } else {
-      alert('퀴즈가 성공적으로 추가되었습니다.');
-      setShowQuizAddModal(false);
-      setNewQuiz({ question: '', o1: '', o2: '', o3: '', o4: '', ans: 1, reward: 1000 });
-      fetchData();
-    }
+    if (error) alert(`퀴즈 저장 중 오류가 발생했습니다: ${error.message}`);
+    else { alert('퀴즈가 추가되었습니다.'); setShowQuizAddModal(false); fetchData(); }
   };
 
   return (
@@ -191,8 +143,7 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
                 <label className="flex items-center gap-1 px-3 py-2 text-xs font-bold bg-indigo-600 text-white rounded-lg cursor-pointer hover:bg-indigo-700">
                   <FileSpreadsheet size={14}/> 일괄 등록
                   <input type="file" className="hidden" onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
+                    const file = e.target.files?.[0]; if (!file) return;
                     const reader = new FileReader();
                     reader.onload = async (evt) => {
                       const data = new Uint8Array(evt.target?.result as ArrayBuffer);
@@ -203,11 +154,8 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
                         grade: String(row[0]), class: String(row[1]), number: String(row[2]), name: String(row[3]),
                         salary: Number(row[4] || 0), balance: 0, bank_balance: 0, brokerage_balance: 0, teacher_id: teacherId, session_code: activeSession.session_code, password: ''
                       }));
-                      await supabase.from('students').upsert(studentData);
-                      alert(`${studentData.length}명 등록 완료!`);
-                      fetchData();
-                    };
-                    reader.readAsArrayBuffer(file);
+                      await supabase.from('students').upsert(studentData); fetchData(); alert(`${studentData.length}명 등록 완료!`);
+                    }; reader.readAsArrayBuffer(file);
                   }} accept=".xlsx,.xls,.csv" />
                 </label>
               </div>
@@ -232,10 +180,7 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
                         <td key={field} className="px-4 py-4">
                           <div className="flex items-center gap-1 cursor-pointer hover:text-indigo-600" onClick={async () => {
                             const val = prompt(`${field} 수정: 새로운 값을 입력하세요`, String(s[field as keyof Student]));
-                            if (val !== null) {
-                              await supabase.from('students').update({ [field]: Number(val) }).eq('id', s.id);
-                              fetchData();
-                            }
+                            if (val !== null) { await supabase.from('students').update({ [field]: Number(val) }).eq('id', s.id); fetchData(); }
                           }}>{s[field as keyof Student]?.toLocaleString()} <Settings size={10} className="opacity-20"/></div>
                         </td>
                       ))}
@@ -334,8 +279,11 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
             <div className="space-y-3">
               {quizzes.map(q => (
                 <div key={q.id} className="p-4 border rounded-xl flex justify-between items-start hover:bg-slate-50 transition-colors">
-                  <div>
-                    <p className="font-bold text-slate-800">{q.question}</p>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                       <p className="font-bold text-slate-800">{q.question}</p>
+                       {(q as any).usage_count > 0 && <span className="text-[9px] font-black px-1.5 py-0.5 bg-indigo-100 text-indigo-600 rounded border border-indigo-200 flex items-center gap-0.5"><Eye size={10}/> {(q as any).usage_count}회 출제됨</span>}
+                    </div>
                     <div className="grid grid-cols-2 gap-x-4 mt-2">
                       {q.options.map((opt, i) => (
                         <p key={i} className={`text-xs ${q.answer === i + 1 ? 'text-indigo-600 font-bold' : 'text-slate-400'}`}>
@@ -350,7 +298,7 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
                   </div>
                 </div>
               ))}
-              {quizzes.length === 0 && <p className="text-center py-20 text-slate-400">등록된 퀴즈가 없습니다. 엑셀로 업로드해주세요.</p>}
+              {quizzes.length === 0 && <p className="text-center py-20 text-slate-400">등록된 퀴즈가 없습니다.</p>}
             </div>
           </div>
         )}
@@ -358,70 +306,16 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
         {activeTab === 'settings' && (
           <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-6">
             <h2 className="text-xl font-bold flex items-center gap-2"><Settings size={20}/> 환경 설정</h2>
-            
             <div className="space-y-4">
               <div className="p-5 bg-indigo-50 rounded-2xl border border-indigo-100 space-y-4">
                 <h3 className="font-bold text-indigo-800 flex items-center gap-2"><GraduationCap size={16}/> 학생 수준 설정</h3>
-                <p className="text-xs text-indigo-600">AI가 뉴스 요약이나 퀴즈를 생성할 때 참고하는 학생들의 연령대입니다.</p>
                 <div className="grid grid-cols-3 gap-2">
                   {(['elementary', 'middle', 'high'] as SchoolLevel[]).map(level => (
-                    <button 
-                      key={level} 
-                      onClick={() => updateSessionSetting({ school_level: level })}
-                      className={`py-3 px-4 rounded-xl text-sm font-bold border transition-all ${settings.school_level === level ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-600 hover:border-indigo-200'}`}
-                    >
+                    <button key={level} onClick={() => updateSessionSetting({ school_level: level })} className={`py-3 px-4 rounded-xl text-sm font-bold border transition-all ${settings.school_level === level ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-600 hover:border-indigo-200'}`}>
                       {level === 'elementary' ? '초등학생' : level === 'middle' ? '중학생' : '고등학생'}
                     </button>
                   ))}
                 </div>
-              </div>
-
-              <div className="p-5 bg-slate-50 rounded-2xl border border-slate-200 flex justify-between items-center">
-                <div>
-                  <h3 className="font-bold text-slate-800">부동산 자동 승인</h3>
-                  <p className="text-[10px] text-slate-500">활성화 시 학생들이 부동산 구매를 신청하면 즉시 소유권이 이전됩니다.</p>
-                </div>
-                <button 
-                  onClick={() => updateSessionSetting({ auto_approve_estate: !settings.auto_approve_estate })}
-                  className={`w-12 h-6 rounded-full transition-all relative ${settings.auto_approve_estate ? 'bg-emerald-500' : 'bg-slate-300'}`}
-                >
-                  <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${settings.auto_approve_estate ? 'right-1' : 'left-1'}`}></div>
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 퀴즈 개별 추가 모달 */}
-        {showQuizAddModal && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold">퀴즈 개별 추가</h3>
-                <button onClick={()=>setShowQuizAddModal(false)}><X size={24}/></button>
-              </div>
-              <div className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-500 ml-1">문제</label>
-                  <input type="text" placeholder="문제를 입력하세요" value={newQuiz.question} onChange={(e)=>setNewQuiz({...newQuiz, question: e.target.value})} className="w-full p-3 border rounded-xl font-bold" />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <input type="text" placeholder="보기1" value={newQuiz.o1} onChange={(e)=>setNewQuiz({...newQuiz, o1: e.target.value})} className="p-2 border rounded-lg text-sm" />
-                  <input type="text" placeholder="보기2" value={newQuiz.o2} onChange={(e)=>setNewQuiz({...newQuiz, o2: e.target.value})} className="p-2 border rounded-lg text-sm" />
-                  <input type="text" placeholder="보기3" value={newQuiz.o3} onChange={(e)=>setNewQuiz({...newQuiz, o3: e.target.value})} className="p-2 border rounded-lg text-sm" />
-                  <input type="text" placeholder="보기4" value={newQuiz.o4} onChange={(e)=>setNewQuiz({...newQuiz, o4: e.target.value})} className="p-2 border rounded-lg text-sm" />
-                </div>
-                <div className="flex gap-4 items-center">
-                  <label className="text-xs font-bold">정답 번호</label>
-                  <select value={newQuiz.ans} onChange={(e)=>setNewQuiz({...newQuiz, ans: Number(e.target.value)})} className="flex-1 p-2 border rounded-lg text-sm">
-                    <option value={1}>1번</option><option value={2}>2번</option><option value={3}>3번</option><option value={4}>4번</option>
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-500 ml-1">보상금</label>
-                  <input type="number" placeholder="성공 시 지급할 금액" value={newQuiz.reward} onChange={(e)=>setNewQuiz({...newQuiz, reward: Number(e.target.value)})} className="w-full p-3 border rounded-xl font-bold" />
-                </div>
-                <button onClick={handleIndividualQuizAdd} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold shadow-lg transition-all hover:bg-indigo-700">퀴즈 추가 완료</button>
               </div>
             </div>
           </div>
