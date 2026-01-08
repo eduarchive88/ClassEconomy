@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { ArrowLeft, PlayCircle, AlertCircle } from 'lucide-react';
+import { ArrowLeft, PlayCircle, AlertCircle, Globe } from 'lucide-react';
 
 interface Props {
   onBack: () => void;
@@ -19,11 +19,29 @@ const SetupGuide: React.FC<Props> = ({ onBack }) => {
       </div>
 
       <div className="space-y-12 pb-20">
-        {/* 최종 체크리스트 */}
+        {/* 사이트 URL 설정 (매우 중요) */}
+        <section>
+          <div className="flex items-center gap-3 mb-6">
+            <div className="bg-red-100 text-red-600 p-2.5 rounded-2xl"><Globe size={28}/></div>
+            <h2 className="text-2xl font-bold text-red-900">0. 필수: Site URL 변경 (에러 해결법)</h2>
+          </div>
+          <div className="bg-white p-6 rounded-3xl border-2 border-red-100 shadow-sm">
+            <p className="text-slate-700 leading-relaxed">
+              로그인 후 <strong>localhost에서 연결을 거부했습니다</strong> 에러가 뜬다면 이 설정을 안 하신 겁니다.
+            </p>
+            <div className="mt-4 p-4 bg-red-50 rounded-2xl text-sm text-red-800 space-y-2">
+              <p>1. Supabase 접속 &gt; <strong>Authentication</strong> &gt; <strong>URL Configuration</strong> 이동</p>
+              <p>2. <strong>Site URL</strong>의 <code>http://localhost:3000</code>을 <strong>Vercel 주소</strong>로 수정</p>
+              <p>3. <strong>Redirect URLs</strong>에도 Vercel 주소를 추가하고 저장(Save)</p>
+            </div>
+          </div>
+        </section>
+
+        {/* 기존 체크리스트 */}
         <section>
           <div className="flex items-center gap-3 mb-6">
             <div className="bg-indigo-100 text-indigo-600 p-2.5 rounded-2xl"><PlayCircle size={28}/></div>
-            <h2 className="text-2xl font-bold text-indigo-900">마지막 3분 완성 체크리스트</h2>
+            <h2 className="text-2xl font-bold text-indigo-900">나머지 체크리스트</h2>
           </div>
           
           <div className="grid grid-cols-1 gap-4">

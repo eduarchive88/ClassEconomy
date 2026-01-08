@@ -24,10 +24,13 @@ const LoginScreen: React.FC<Props> = ({ onLogin }) => {
   const handleGoogleLogin = async () => {
     setIsLoading(true);
     try {
+      // 배포 환경과 로컬 환경을 구분하여 리디렉션 주소 설정
+      const redirectUrl = window.location.origin;
+      
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin
+          redirectTo: redirectUrl
         }
       });
       if (error) throw error;
