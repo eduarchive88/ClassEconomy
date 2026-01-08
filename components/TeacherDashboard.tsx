@@ -93,27 +93,28 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
     reader.readAsArrayBuffer(file);
   };
 
-  const processWeeklyInterest = async () => {
-    if (!confirm('현재 모든 학생의 은행 잔고에 대해 주간 이자(연 2%의 1/52)를 지급하시겠습니까?')) return;
-    
-    // 연 2% -> 주 약 0.03846%
-    const weeklyRate = 0.02 / 52;
-    let count = 0;
+  const handleMassTransaction = async (amount: number, isTax: boolean, targetIds?: string[]) => {
+    const targets = targetIds ? students.filter(s => targetIds.includes(s.id)) : students;
+    if (targets.length === 0 || amount <= 0) return;
 
-    for (const s of students) {
-      if (s.bank_balance > 0) {
-        const interest = Math.floor(s.bank_balance * weeklyRate);
-        if (interest > 0) {
-          await supabase.from('students').update({ bank_balance: s.bank_balance + interest }).eq('id', s.id);
-          await supabase.from('transactions').insert({
-            session_code: s.session_code, sender_id: 'GOVERNMENT', sender_name: '정부',
-            receiver_id: s.id, receiver_name: s.name, amount: interest, type: 'interest', description: '은행 주간 이자 지급'
-          });
-          count++;
-        }
-      }
+    const label = isTax ? (targetIds ? '범칙금 부과' : '세금 징수') : '수당 지급';
+    if (!confirm(`${label}를 진행할까요? 대상: ${targets.length}명, 금액: ${amount}원`)) return;
+
+    for (const s of targets) {
+      const newBalance = isTax ? s.balance - amount : s.balance + amount;
+      await supabase.from('students').update({ balance: Math.max(0, newBalance) }).eq('id', s.id);
+      await supabase.from('transactions').insert({
+        session_code: s.session_code,
+        sender_id: isTax ? s.id : 'GOVERNMENT',
+        sender_name: isTax ? s.name : '정부',
+        receiver_id: isTax ? 'GOVERNMENT' : s.id,
+        receiver_name: isTax ? '정부' : s.name,
+        amount, type: isTax ? (targetIds ? 'fine' : 'tax') : 'reward',
+        description: isTax ? (targetIds ? '범칙금 부과' : '세금 징수') : '수당 지급'
+      });
     }
-    alert(`${count}명의 학생에게 이자가 지급되었습니다.`);
+    alert('완료되었습니다.');
+    setSelectedStudentIds([]);
     fetchData();
   };
 
@@ -180,7 +181,6 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
                 </label>
               </div>
             </div>
-            {/* 학생 테이블 생략 (기존과 동일) */}
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead>
@@ -220,10 +220,7 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
         {activeTab === 'economy' && (
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl border shadow-sm">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-bold flex items-center gap-2"><Megaphone size={20}/> 정기 세금/주급 및 이자</h2>
-                <button onClick={processWeeklyInterest} className="bg-amber-100 text-amber-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-amber-200 flex items-center gap-2"><Landmark size={14}/> 은행 주간 이자 일괄 지급</button>
-              </div>
+              <h2 className="text-xl font-bold mb-6 flex items-center gap-2"><Megaphone size={20}/> 정기 세금/주급 설정</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
                 <div className="p-5 bg-red-50 rounded-2xl border border-red-100 space-y-4">
                   <h3 className="font-bold text-red-800 flex items-center gap-2"><Coins size={16}/> 정기 세금 징수</h3>
@@ -254,11 +251,26 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
                   </div>
                 </div>
               </div>
-              <div className="p-6 bg-slate-50 rounded-2xl mb-4 border border-dashed">
-                <label className="text-xs font-bold text-slate-500 mb-2 block">일일 퀴즈 제공 개수 (최대 10개)</label>
-                <input type="number" value={settings.quiz_count_per_day} onChange={(e)=>setSettings({...settings, quiz_count_per_day: Math.min(10, Number(e.target.value))})} className="w-full p-3 border rounded-xl font-bold" />
+              <button onClick={() => updateSessionSetting(settings)} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all hover:bg-indigo-700"><Save size={20}/> 경제 자동화 설정 저장</button>
+            </div>
+
+            <div className="bg-white p-6 rounded-2xl border shadow-sm">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl font-bold flex items-center gap-2"><Users size={20}/> 학생 수당/범칙금 부과</h2>
+                <button onClick={() => setSelectedStudentIds(selectedStudentIds.length === students.length ? [] : students.map(s => s.id))} className="text-xs font-bold text-slate-500 flex items-center gap-2">
+                  {selectedStudentIds.length === students.length ? <CheckSquare size={16}/> : <Square size={16}/>} 모두 선택
+                </button>
               </div>
-              <button onClick={() => updateSessionSetting(settings)} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2"><Save size={20}/> 모든 경제 설정 저장</button>
+              <div className="bg-slate-50 p-4 rounded-xl flex gap-3 mb-4">
+                <input type="number" id="ecoAmt" placeholder="금액 입력" className="flex-1 p-2 border rounded-xl outline-none focus:ring-2 focus:ring-indigo-600" />
+                <button onClick={() => handleMassTransaction(Number((document.getElementById('ecoAmt') as HTMLInputElement).value), false, selectedStudentIds)} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-bold">수당 지급</button>
+                <button onClick={() => handleMassTransaction(Number((document.getElementById('ecoAmt') as HTMLInputElement).value), true, selectedStudentIds)} className="bg-red-500 text-white px-4 py-2 rounded-xl text-sm font-bold">범칙금 부과</button>
+              </div>
+              <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-7 gap-2">
+                {students.map(s => (
+                  <button key={s.id} onClick={() => setSelectedStudentIds(p => p.includes(s.id) ? p.filter(id => id !== s.id) : [...p, s.id])} className={`p-2 rounded-lg border text-xs font-bold transition-all ${selectedStudentIds.includes(s.id) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white hover:bg-slate-50'}`}>{s.name}</button>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -266,7 +278,7 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
         {activeTab === 'quiz' && (
           <div className="bg-white p-6 rounded-2xl border shadow-sm">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold flex items-center gap-2"><HelpCircle size={20}/> 퀴즈 저장소</h2>
+              <h2 className="text-xl font-bold flex items-center gap-2"><HelpCircle size={20}/> 퀴즈 관리</h2>
               <div className="flex gap-2">
                 <button onClick={downloadQuizTemplate} className="flex items-center gap-1 px-3 py-2 text-xs font-bold bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200"><Download size={14}/> 양식 다운</button>
                 <button onClick={() => setShowQuizAddModal(true)} className="flex items-center gap-1 px-3 py-2 text-xs font-bold bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200"><Plus size={14}/> 개별 추가</button>
@@ -276,6 +288,18 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
                 </label>
               </div>
             </div>
+
+            <div className="p-6 bg-indigo-50 rounded-2xl mb-6 border border-indigo-100 flex items-center justify-between gap-4">
+              <div>
+                <label className="text-xs font-black text-indigo-900 mb-1 block">일일 퀴즈 제공 개수 (매일 자동 갱신)</label>
+                <p className="text-[10px] text-indigo-600">설정한 개수만큼 매일 오전 8시에 랜덤으로 학생들에게 노출됩니다.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <input type="number" value={settings.quiz_count_per_day} onChange={(e)=>setSettings({...settings, quiz_count_per_day: Math.min(10, Math.max(0, Number(e.target.value)))})} className="w-20 p-2 border rounded-xl font-black text-center outline-none focus:ring-2 focus:ring-indigo-600" />
+                <button onClick={() => updateSessionSetting(settings)} className="bg-indigo-600 text-white p-2 rounded-xl hover:bg-indigo-700"><Check size={20}/></button>
+              </div>
+            </div>
+
             <div className="space-y-3">
               {quizzes.map(q => (
                 <div key={q.id} className="p-4 border rounded-xl flex justify-between items-start hover:bg-slate-50 transition-colors">
@@ -334,8 +358,6 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
             </div>
           </div>
         )}
-        
-        {/* 기존 로그/설정 탭 생략 (정부 명칭 이미 적용됨) */}
       </div>
     </div>
   );

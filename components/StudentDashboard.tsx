@@ -40,22 +40,70 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
       const { data: sv } = await supabase.from('savings_records').select('*').eq('student_id', studentId);
       if (sv) setSavings(sv);
       
+      // 자동 이자 지급 체크
+      checkAndApplyAutoInterest(st, tx || []);
+      
       if (activeTab === 'quiz') fetchQuizzes(st.session_code);
+    }
+  };
+
+  const checkAndApplyAutoInterest = async (st: Student, txLogs: Transaction[]) => {
+    if (st.bank_balance <= 0) return;
+
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+
+    // 1. 최근 1주일 내에 이자(interest) 지급 내역이 있는지 확인
+    const lastInterestTx = txLogs.find(tx => tx.type === 'interest');
+    const recentlyPaid = lastInterestTx && new Date(lastInterestTx.created_at) > oneWeekAgo;
+    
+    if (!recentlyPaid) {
+      // 2. 은행 저축 기록 중 1주일 이상 된 내역이 있는지 확인 (사용자가 저축한 시점 기준)
+      const { data: oldSavings } = await supabase
+        .from('savings_records')
+        .select('*')
+        .eq('student_id', st.id)
+        .eq('account_type', 'bank')
+        .lt('created_at', oneWeekAgo.toISOString())
+        .limit(1);
+
+      if (oldSavings && oldSavings.length > 0) {
+        // 주간 이자 계산 (연 2% -> 주 약 0.03846%)
+        const weeklyRate = 0.02 / 52;
+        const interestAmount = Math.floor(st.bank_balance * weeklyRate);
+
+        if (interestAmount > 0) {
+          // 이자 지급 처리
+          await supabase.from('students').update({ bank_balance: st.bank_balance + interestAmount }).eq('id', st.id);
+          await supabase.from('transactions').insert({
+            session_code: st.session_code, sender_id: 'GOVERNMENT', sender_name: '정부',
+            receiver_id: st.id, receiver_name: st.name, amount: interestAmount, type: 'interest',
+            description: '자동 주간 이자 지급 (연 2%)'
+          });
+          
+          // 데이터 리프레시
+          const { data: updatedSt } = await supabase.from('students').select('*').eq('id', studentId).single();
+          if (updatedSt) setStudent(updatedSt);
+        }
+      }
     }
   };
 
   const fetchQuizzes = async (code: string) => {
     const { data: settings } = await supabase.from('economy_settings').select('quiz_count_per_day').eq('session_code', code).single();
-    const count = settings?.quiz_count_per_day || 1;
+    const count = settings?.quiz_count_per_day || 0;
     
-    // 날짜 기반 시드 생성 (오전 8시 기준 갱신)
+    if (count <= 0) {
+      setDailyQuizzes([]);
+      return;
+    }
+    
     const now = new Date();
     if (now.getHours() < 8) now.setDate(now.getDate() - 1);
     const dateStr = now.toISOString().split('T')[0];
     
     const { data: allQuizzes } = await supabase.from('quizzes').select('*').eq('session_code', code);
     if (allQuizzes && allQuizzes.length > 0) {
-      // 결정론적 랜덤 셔플
       const seededRandom = (seed: string) => {
         let h = 0; for(let i=0; i<seed.length; i++) h = Math.imul(31, h) + seed.charCodeAt(i) | 0;
         return () => { h = Math.imul(h ^ h >>> 16, 0x85ebca6b); h = Math.imul(h ^ h >>> 13, 0xc2b2ae35); return ((h ^= h >>> 16) >>> 0) / 4294967296; };
@@ -72,11 +120,8 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
   const handleAssetTransfer = async (from: string, to: string) => {
     if (!student || transferAmount <= 0) return;
     
-    // 출금 제한 체크 (저축 -> 현금 이체 시)
     if (from !== 'balance') {
       const mySavings = savings.filter(s => s.account_type === (from === 'bank_balance' ? 'bank' : 'brokerage'));
-      const totalAmount = mySavings.reduce((sum, r) => sum + r.amount, 0);
-      
       const now = new Date();
       const availableAmount = mySavings
         .filter(r => (now.getTime() - new Date(r.created_at).getTime()) >= 7 * 24 * 60 * 60 * 1000)
@@ -99,20 +144,16 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
       };
       await supabase.from('students').update(updates).eq('id', studentId);
       
-      // 입금 시 기록 (락 적용 대상)
       if (to !== 'balance') {
         await supabase.from('savings_records').insert({
           student_id: studentId, amount: transferAmount, account_type: to === 'bank_balance' ? 'bank' : 'brokerage'
         });
-      } else {
-        // 출금 시 오래된 기록부터 차감 로직 (복잡하므로 간단히 전체 금액에서 차감 처리)
-        // 실제 운영 시에는 FIFO 방식의 차감 로직이 필요함
       }
 
       await supabase.from('transactions').insert({
         session_code: student.session_code, sender_id: student.id, sender_name: student.name,
         receiver_id: student.id, receiver_name: student.name, amount: transferAmount, type: 'transfer',
-        description: `${from} → ${to} 자산 이동`
+        description: `${from === 'balance' ? '현금' : from === 'bank_balance' ? '은행' : '증권'} → ${to === 'balance' ? '현금' : to === 'bank_balance' ? '은행' : '증권'} 이체`
       });
 
       alert('이체 완료!');
@@ -155,7 +196,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
             <h3 className="text-2xl font-black text-slate-900">{student.balance.toLocaleString()}원</h3>
           </div>
           <div className="bg-white p-6 rounded-2xl border shadow-sm border-b-4 border-b-emerald-500 relative overflow-hidden">
-            <p className="text-[10px] font-bold text-slate-400 mb-1">은행 (연 2% 주간이자)</p>
+            <p className="text-[10px] font-bold text-slate-400 mb-1">은행 (연 2% 복리)</p>
             <h3 className="text-2xl font-black text-slate-900">{student.bank_balance.toLocaleString()}원</h3>
             <Landmark size={40} className="absolute -right-2 -bottom-2 text-emerald-50 opacity-10" />
           </div>
@@ -182,12 +223,16 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
               <h3 className="text-lg font-bold">1. 자산 이동 경로 선택</h3>
               <div className="grid grid-cols-1 gap-3">
                 {[
-                  { id: 'b2bank', label: '현금 → 은행', from: 'balance', to: 'bank_balance', desc: '이자 수익 발생 (출금 7일 제한)' },
+                  { id: 'b2bank', label: '현금 → 은행', from: 'balance', to: 'bank_balance', desc: '주간 이자 수익 (출금 7일 제한)' },
                   { id: 'b2stock', label: '현금 → 증권', from: 'balance', to: 'brokerage_balance', desc: '투자 예수금 확보 (출금 7일 제한)' },
                   { id: 'bank2b', label: '은행 → 현금', from: 'bank_balance', to: 'balance', desc: '저축액 출금' },
                   { id: 'stock2b', label: '증권 → 현금', from: 'brokerage_balance', to: 'balance', desc: '투자금 회수' },
                 ].map(path => (
-                  <button key={path.id} onClick={() => {(document.getElementById('fromAcc') as any).value = path.from; (document.getElementById('toAcc') as any).value = path.to;}} className="p-4 border rounded-2xl text-left hover:border-indigo-600 hover:bg-indigo-50 transition-all group">
+                  <button key={path.id} onClick={() => {
+                    const fromInput = document.getElementById('fromAcc') as HTMLInputElement;
+                    const toInput = document.getElementById('toAcc') as HTMLInputElement;
+                    if(fromInput && toInput) { fromInput.value = path.from; toInput.value = path.to; }
+                  }} className="p-4 border rounded-2xl text-left hover:border-indigo-600 hover:bg-indigo-50 transition-all group">
                     <p className="font-bold text-slate-800">{path.label}</p>
                     <p className="text-[10px] text-slate-400 mt-1">{path.desc}</p>
                   </button>
@@ -203,11 +248,15 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
                   <label className="text-[10px] font-bold text-slate-400">이체할 금액</label>
                   <input type="number" value={transferAmount} onChange={(e)=>setTransferAmount(Number(e.target.value))} className="w-full bg-white p-4 rounded-2xl text-2xl font-black text-center outline-none border focus:ring-2 focus:ring-indigo-600" />
                 </div>
-                <button onClick={() => handleAssetTransfer((document.getElementById('fromAcc') as any).value, (document.getElementById('toAcc') as any).value)} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg hover:shadow-indigo-200 transition-all active:scale-95">이체하기</button>
+                <button onClick={() => {
+                  const fromVal = (document.getElementById('fromAcc') as HTMLInputElement).value;
+                  const toVal = (document.getElementById('toAcc') as HTMLInputElement).value;
+                  handleAssetTransfer(fromVal, toVal);
+                }} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg hover:shadow-indigo-200 transition-all active:scale-95">이체하기</button>
               </div>
               <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 flex gap-3">
                 <Clock className="text-amber-600 shrink-0" size={18} />
-                <p className="text-[11px] text-amber-800 leading-relaxed font-bold">은행/증권으로 보낸 돈은 <strong>보낸 날로부터 정확히 7일(168시간)</strong>이 지나야 다시 현금으로 가져올 수 있습니다.</p>
+                <p className="text-[11px] text-amber-800 leading-relaxed font-bold">은행/증권으로 보낸 돈은 <strong>보낸 날로부터 정확히 7일</strong>이 지나야 다시 현금으로 가져올 수 있습니다.</p>
               </div>
             </div>
           </div>
@@ -256,7 +305,6 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
         </div>
       )}
 
-      {/* 공통 통장 기록 UI 생략 (기존과 동일) */}
       <div className="bg-white p-6 rounded-2xl border shadow-sm mt-8">
         <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><History size={18}/> 내 통장 기록</h3>
         <div className="space-y-3">
