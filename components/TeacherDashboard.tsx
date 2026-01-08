@@ -3,12 +3,11 @@ import React, { useState, useEffect } from 'react';
 import { 
   Users, Landmark, ShoppingBag, BookOpen, Settings,
   Map, Download, Plus, RefreshCw, Trash2, Check, X, 
-  Coins, Megaphone, ArrowUpDown, UserPlus, Calendar, Clock,
-  Edit3, CheckSquare, Square
+  Coins, Megaphone, CheckSquare, Square, History, Save, AlertTriangle
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../services/supabaseClient';
-import { EconomySettings, Student, Quiz, MarketItem, Seat } from '../types';
+import { EconomySettings, Student, Transaction } from '../types';
 
 interface Props {
   teacherId: string;
@@ -16,246 +15,198 @@ interface Props {
 }
 
 const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
-  const [activeTab, setActiveTab] = useState('students');
+  const [activeTab, setActiveTab] = useState(() => localStorage.getItem('teacher_active_tab') || 'students');
   const [students, setStudents] = useState<Student[]>([]);
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
-  const [quizzes, setQuizzes] = useState<Quiz[]>([]);
-  const [marketItems, setMarketItems] = useState<MarketItem[]>([]);
-  const [pendingSeats, setPendingSeats] = useState<(Seat & { owner_name?: string, buyer_name?: string })[]>([]);
   const [settings, setSettings] = useState<EconomySettings>(activeSession);
-  
-  // 수정용
-  const [editingStudent, setEditingStudent] = useState<string | null>(null);
-  const [editField, setEditField] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState<number>(0);
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [newStudent, setNewStudent] = useState({ grade: '', class: '', number: '', name: '' });
+  const [logs, setLogs] = useState<Transaction[]>([]);
+  const [logFilter, setLogFilter] = useState('all');
+
+  // 상태 변경 시 로컬스토리지 저장
+  useEffect(() => {
+    localStorage.setItem('teacher_active_tab', activeTab);
+  }, [activeTab]);
 
   useEffect(() => {
     fetchData();
   }, [activeSession.session_code, activeTab]);
 
   const fetchData = async () => {
-    try {
-      const code = activeSession.session_code;
-      if (activeTab === 'students' || activeTab === 'economy') {
-        const { data } = await supabase.from('students').select('*').eq('session_code', code).order('id', { ascending: true });
-        if (data) setStudents(data);
-      } else if (activeTab === 'quiz') {
-        const { data } = await supabase.from('quizzes').select('*').eq('teacher_id', teacherId);
-        if (data) setQuizzes(data);
-      } else if (activeTab === 'market') {
-        const { data } = await supabase.from('market_items').select('*').eq('teacher_id', teacherId);
-        if (data) setMarketItems(data);
-      } else if (activeTab === 'estate') {
-        const { data } = await supabase.from('seats').select('*, students!owner_id(name)').eq('teacher_id', teacherId).eq('status', 'pending');
-        if (data) setPendingSeats(data as any);
+    const code = activeSession.session_code;
+    if (activeTab === 'students' || activeTab === 'economy') {
+      const { data } = await supabase.from('students').select('*').eq('session_code', code).order('id', { ascending: true });
+      if (data) setStudents(data);
+    } else if (activeTab === 'logs') {
+      let query = supabase.from('transactions').select('*').eq('session_code', code).order('created_at', { ascending: false });
+      if (logFilter !== 'all') query = query.eq('type', logFilter);
+      const { data } = await query;
+      if (data) setLogs(data);
+    }
+  };
+
+  const checkAndRunAutoTasks = async () => {
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    const hour = now.getHours();
+    
+    // 세금 처리
+    if (settings.tax_day === now.getDay() && settings.tax_time === `${hour}:00` && settings.last_auto_tax_date !== today) {
+      if (confirm(`현재 시간(${hour}시)은 정기 세금 징수 시간입니다. 실행하시겠습니까?`)) {
+        await handleMassTransaction(settings.tax_amount || 0, true);
+        await updateSessionSetting({ last_auto_tax_date: today });
       }
-    } catch (err) { console.error(err); }
+    }
+
+    // 주급 처리
+    if (settings.salary_day === now.getDay() && settings.salary_time === `${hour}:00` && settings.last_auto_salary_date !== today) {
+      if (confirm(`현재 시간(${hour}시)은 정기 주급 지급 시간입니다. 실행하시겠습니까?`)) {
+        for (const s of students) {
+          if (s.salary > 0) {
+            await supabase.from('students').update({ balance: s.balance + s.salary }).eq('id', s.id);
+            await supabase.from('transactions').insert({
+              session_code: s.session_code, sender_id: 'SYSTEM', sender_name: '시스템',
+              receiver_id: s.id, receiver_name: s.name, amount: s.salary, type: 'salary', description: '정기 주급 지급'
+            });
+          }
+        }
+        await updateSessionSetting({ last_auto_salary_date: today });
+        fetchData();
+      }
+    }
   };
 
   const handleMassTransaction = async (amount: number, isTax: boolean, targetIds?: string[]) => {
     const targets = targetIds ? students.filter(s => targetIds.includes(s.id)) : students;
-    if (targets.length === 0) return;
+    if (targets.length === 0 || amount <= 0) return;
 
     const label = isTax ? (targetIds ? '범칙금 부과' : '세금 징수') : '수당 지급';
     if (!confirm(`${label}를 진행할까요? 대상: ${targets.length}명, 금액: ${amount}원`)) return;
 
     for (const s of targets) {
-      const currentVal = isTax ? s.balance : s.balance;
       const newBalance = isTax ? s.balance - amount : s.balance + amount;
       await supabase.from('students').update({ balance: Math.max(0, newBalance) }).eq('id', s.id);
+      await supabase.from('transactions').insert({
+        session_code: s.session_code,
+        sender_id: isTax ? s.id : 'SYSTEM',
+        sender_name: isTax ? s.name : '시스템',
+        receiver_id: isTax ? 'SYSTEM' : s.id,
+        receiver_name: isTax ? '시스템' : s.name,
+        amount, type: isTax ? (targetIds ? 'fine' : 'tax') : 'reward',
+        description: isTax ? (targetIds ? '범칙금 부과' : '세금 징수') : '수당 지급'
+      });
     }
     alert('완료되었습니다.');
-    if (targetIds) setSelectedStudentIds([]);
-    fetchData();
-  };
-
-  const updateStudentField = async (id: string, field: string) => {
-    await supabase.from('students').update({ [field]: editValue }).eq('id', id);
-    setEditingStudent(null);
-    setEditField(null);
+    setSelectedStudentIds([]);
     fetchData();
   };
 
   const updateSessionSetting = async (updates: Partial<EconomySettings>) => {
-    const { data, error } = await supabase.from('economy_settings').update(updates).eq('id', settings.id).select().single();
+    const { data } = await supabase.from('economy_settings').update(updates).eq('id', settings.id).select().single();
     if (data) setSettings(data);
-    if (error) console.error(error);
   };
 
-  const handleBulkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      const data = new Uint8Array(evt.target?.result as ArrayBuffer);
-      const workbook = XLSX.read(data, { type: 'array' });
-      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 }) as any[];
-      const studentData = rows.slice(1).filter(row => row[3]).map(row => {
-        const grade = String(row[0]);
-        const cls = String(row[1]).padStart(2, '0');
-        const num = String(row[2]).padStart(2, '0');
-        return {
-          grade, class: String(row[1]), number: String(row[2]), name: String(row[3]),
-          id: `${grade}${cls}${num}`,
-          salary: Number(row[4] || 0), balance: 0, bank_balance: 0, brokerage_balance: 0,
-          teacher_id: teacherId, session_code: activeSession.session_code, password: '' 
-        };
-      });
-      await supabase.from('students').upsert(studentData);
-      alert(`${studentData.length}명 등록 완료!`);
-      fetchData();
-    };
-    reader.readAsArrayBuffer(file);
-  };
-
-  const toggleSelectAll = () => {
-    if (selectedStudentIds.length === students.length) {
-      setSelectedStudentIds([]);
-    } else {
-      setSelectedStudentIds(students.map(s => s.id));
+  const deleteCurrentClass = async () => {
+    if (confirm('⚠️ 경고: 이 학급의 모든 데이터(학생, 로그, 설정)가 영구 삭제됩니다. 정말 삭제하시겠습니까?')) {
+      if (confirm('한 번 더 확인합니다. 정말로 삭제하시겠습니까?')) {
+        await supabase.from('students').delete().eq('session_code', settings.session_code);
+        await supabase.from('transactions').delete().eq('session_code', settings.session_code);
+        await supabase.from('economy_settings').delete().eq('id', settings.id);
+        alert('삭제되었습니다.');
+        window.location.reload();
+      }
     }
   };
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-      {/* Sidebar Navigation */}
       <div className="bg-white p-4 rounded-2xl shadow-sm border h-fit sticky top-24 space-y-1">
         {[
           { id: 'students', icon: <Users size={18}/>, label: '학생 관리' },
           { id: 'economy', icon: <Landmark size={18}/>, label: '경제 관리' },
-          { id: 'quiz', icon: <BookOpen size={18}/>, label: '퀴즈 관리' },
-          { id: 'market', icon: <ShoppingBag size={18}/>, label: '마켓 관리' },
-          { id: 'estate', icon: <Map size={18}/>, label: '부동산 승인' },
+          { id: 'logs', icon: <History size={18}/>, label: '로그 관리' },
           { id: 'settings', icon: <Settings size={18}/>, label: '환경 설정' },
         ].map(item => (
-          <button 
-            key={item.id} 
-            onClick={() => setActiveTab(item.id)} 
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${activeTab === item.id ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-600 hover:bg-slate-50'}`}
-          >
+          <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${activeTab === item.id ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-600 hover:bg-slate-50'}`}>
             {item.icon} {item.label}
           </button>
         ))}
       </div>
 
       <div className="md:col-span-3 space-y-6">
-        {/* 학생 관리 탭 */}
         {activeTab === 'students' && (
           <div className="bg-white p-6 rounded-2xl border shadow-sm">
-            <div className="flex justify-between items-center mb-6">
-              <div>
-                <h2 className="text-xl font-bold">학생 명단 ({students.length}명)</h2>
-                <p className="text-xs text-slate-400 mt-1">자산을 클릭하여 직접 수정할 수 있습니다.</p>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={() => setShowAddModal(true)} className="flex items-center gap-1 px-3 py-2 text-xs font-bold bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200"><UserPlus size={14}/> 개별 추가</button>
-                <label className="flex items-center gap-1 px-3 py-2 text-xs font-bold bg-indigo-600 text-white rounded-lg cursor-pointer hover:bg-indigo-700 transition-colors"><Plus size={14}/> 엑셀 업로드 <input type="file" className="hidden" onChange={handleBulkUpload} accept=".xlsx,.xls,.csv" /></label>
-              </div>
-            </div>
+            <h2 className="text-xl font-bold mb-6">학생 명단 관리</h2>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead>
-                  <tr className="bg-slate-50 border-y text-[11px] uppercase tracking-wider text-slate-500">
-                    <th className="px-4 py-3 font-bold">학번</th>
-                    <th className="px-4 py-3 font-bold">이름</th>
-                    <th className="px-4 py-3 font-bold text-indigo-600">총 자산</th>
-                    <th className="px-4 py-3 font-bold">현금</th>
-                    <th className="px-4 py-3 font-bold">은행</th>
-                    <th className="px-4 py-3 font-bold">증권</th>
-                    <th className="px-4 py-3 font-bold">삭제</th>
+                  <tr className="bg-slate-50 border-y text-slate-500 font-bold">
+                    <th className="px-4 py-3">학번</th><th className="px-4 py-3">이름</th>
+                    <th className="px-4 py-3 text-indigo-600">총 자산</th>
+                    <th className="px-4 py-3">현금</th><th className="px-4 py-3">은행</th><th className="px-4 py-3">증권</th>
+                    <th className="px-4 py-3 text-emerald-600">주급</th><th className="px-4 py-3">삭제</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {students.map(s => {
-                    const totalAssets = s.balance + s.bank_balance + s.brokerage_balance;
-                    return (
-                      <tr key={s.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="px-4 py-4 font-mono font-bold text-indigo-600">{s.id}</td>
-                        <td className="px-4 py-4 font-bold">{s.name}</td>
-                        <td className="px-4 py-4 font-black text-indigo-700">{totalAssets.toLocaleString()}원</td>
-                        
-                        {/* Editable Fields */}
-                        {[
-                          { key: 'balance', label: '현금', val: s.balance },
-                          { key: 'bank_balance', label: '은행', val: s.bank_balance },
-                          { key: 'brokerage_balance', label: '증권', val: s.brokerage_balance }
-                        ].map(field => (
-                          <td key={field.key} className="px-4 py-4">
-                            {editingStudent === s.id && editField === field.key ? (
-                              <div className="flex gap-1 items-center">
-                                <input 
-                                  type="number" 
-                                  value={editValue} 
-                                  onChange={(e)=>setEditValue(Number(e.target.value))} 
-                                  className="w-24 border border-indigo-300 rounded px-2 py-1 text-xs focus:ring-2 focus:ring-indigo-500 outline-none" 
-                                  autoFocus 
-                                  onKeyDown={(e)=>e.key==='Enter'&&updateStudentField(s.id, field.key)}
-                                />
-                                <button onClick={()=>updateStudentField(s.id, field.key)} className="text-emerald-500"><Check size={16}/></button>
-                                <button onClick={()=>setEditingStudent(null)} className="text-slate-300"><X size={16}/></button>
-                              </div>
-                            ) : (
-                              <div 
-                                className="group cursor-pointer flex items-center gap-1 hover:text-indigo-600 transition-colors" 
-                                onClick={()=>{setEditingStudent(s.id); setEditField(field.key); setEditValue(field.val)}}
-                              >
-                                {field.val.toLocaleString()} <Settings size={10} className="opacity-0 group-hover:opacity-40 transition-opacity"/>
-                              </div>
-                            )}
-                          </td>
-                        ))}
-
-                        <td className="px-4 py-4">
-                          <button onClick={async ()=>{if(confirm('정말 삭제하시겠습니까?')){await supabase.from('students').delete().eq('id', s.id); fetchData();}}} className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all">
-                            <Trash2 size={16} />
-                          </button>
+                <tbody className="divide-y">
+                  {students.map(s => (
+                    <tr key={s.id} className="hover:bg-slate-50/50">
+                      <td className="px-4 py-4 font-mono font-bold text-indigo-600">{s.id}</td>
+                      <td className="px-4 py-4 font-bold">{s.name}</td>
+                      <td className="px-4 py-4 font-black">{(s.balance + s.bank_balance + s.brokerage_balance).toLocaleString()}</td>
+                      {['balance', 'bank_balance', 'brokerage_balance', 'salary'].map(field => (
+                        <td key={field} className="px-4 py-4">
+                          <div className="flex items-center gap-1 cursor-pointer hover:text-indigo-600" onClick={async () => {
+                            const val = prompt('새로운 값을 입력하세요', String(s[field as keyof Student]));
+                            if (val !== null) {
+                              await supabase.from('students').update({ [field]: Number(val) }).eq('id', s.id);
+                              fetchData();
+                            }
+                          }}>{s[field as keyof Student]?.toLocaleString()} <Settings size={10} className="opacity-20"/></div>
                         </td>
-                      </tr>
-                    );
-                  })}
+                      ))}
+                      <td className="px-4 py-4"><button onClick={async () => { if(confirm('삭제하시겠습니까?')) { await supabase.from('students').delete().eq('id', s.id); fetchData(); } }}><Trash2 size={16} className="text-slate-300 hover:text-red-500"/></button></td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           </div>
         )}
 
-        {/* 경제 관리 탭 */}
         {activeTab === 'economy' && (
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl border shadow-sm">
-              <h2 className="text-xl font-bold mb-6 flex items-center gap-2"><Megaphone size={20}/> 정기 세금 자동화 설정</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50 p-6 rounded-2xl">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 flex items-center gap-1"><Calendar size={12}/> 징수 요일</label>
-                  <select 
-                    value={settings.tax_day ?? ''} 
-                    onChange={(e)=>updateSessionSetting({tax_day: Number(e.target.value)})} 
-                    className="w-full p-3 bg-white border rounded-xl font-bold outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="">설정 안함</option>
-                    {['일','월','화','수','목','금','토'].map((d, i) => <option key={i} value={i}>{d}요일</option>)}
-                  </select>
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl font-bold flex items-center gap-2"><Megaphone size={20}/> 정기 세금/주급 자동화</h2>
+                <button onClick={checkAndRunAutoTasks} className="bg-indigo-50 text-indigo-600 px-4 py-2 rounded-xl text-xs font-bold hover:bg-indigo-100 flex items-center gap-2"><RefreshCw size={14}/> 정산 트리거 실행</button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="p-5 bg-red-50 rounded-2xl border border-red-100 space-y-4">
+                  <h3 className="font-bold text-red-800 flex items-center gap-2"><Coins size={16}/> 정기 세금 징수</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    <select value={settings.tax_day ?? ''} onChange={(e)=>updateSessionSetting({tax_day: Number(e.target.value)})} className="p-2 border rounded-lg text-sm">
+                      <option value="">요일 선택</option>
+                      {['일','월','화','수','목','금','토'].map((d, i) => <option key={i} value={i}>{d}요일</option>)}
+                    </select>
+                    <select value={settings.tax_time ?? ''} onChange={(e)=>updateSessionSetting({tax_time: e.target.value})} className="p-2 border rounded-lg text-sm">
+                      <option value="">시간 선택</option>
+                      {[9,10,11,12,13,14,15].map(h => <option key={h} value={`${h}:00`}>{h >= 12 ? '오후' : '오전'} {h === 12 ? 12 : h % 12}시</option>)}
+                    </select>
+                    <input type="number" placeholder="징수액" value={settings.tax_amount ?? 0} onChange={(e)=>updateSessionSetting({tax_amount: Number(e.target.value)})} className="p-2 border rounded-lg text-sm col-span-2" />
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 flex items-center gap-1"><Clock size={12}/> 징수 시간</label>
-                  <input 
-                    type="time" 
-                    value={settings.tax_time || "09:00"} 
-                    onChange={(e)=>updateSessionSetting({tax_time: e.target.value})}
-                    className="w-full p-3 bg-white border rounded-xl font-bold outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 flex items-center gap-1"><Coins size={12}/> 자동 징수액</label>
-                  <input 
-                    type="number" 
-                    value={settings.tax_amount ?? 0} 
-                    onChange={(e)=>updateSessionSetting({tax_amount: Number(e.target.value)})} 
-                    className="w-full p-3 bg-white border rounded-xl font-bold outline-none focus:ring-2 focus:ring-indigo-500" 
-                    placeholder="금액 입력" 
-                  />
+                <div className="p-5 bg-emerald-50 rounded-2xl border border-emerald-100 space-y-4">
+                  <h3 className="font-bold text-emerald-800 flex items-center gap-2"><Megaphone size={16}/> 정기 주급 지급</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    <select value={settings.salary_day ?? ''} onChange={(e)=>updateSessionSetting({salary_day: Number(e.target.value)})} className="p-2 border rounded-lg text-sm">
+                      <option value="">요일 선택</option>
+                      {['일','월','화','수','목','금','토'].map((d, i) => <option key={i} value={i}>{d}요일</option>)}
+                    </select>
+                    <select value={settings.salary_time ?? ''} onChange={(e)=>updateSessionSetting({salary_time: e.target.value})} className="p-2 border rounded-lg text-sm">
+                      <option value="">시간 선택</option>
+                      {[9,10,11,12,13,14,15].map(h => <option key={h} value={`${h}:00`}>{h >= 12 ? '오후' : '오전'} {h === 12 ? 12 : h % 12}시</option>)}
+                    </select>
+                    <div className="col-span-2 p-2 bg-white/50 rounded-lg text-[10px] text-emerald-600 font-bold">주급은 학생별 설정된 금액으로 자동 지급됩니다.</div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -263,153 +214,79 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
             <div className="bg-white p-6 rounded-2xl border shadow-sm">
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl font-bold flex items-center gap-2"><Users size={20}/> 학생 수당/범칙금 부과</h2>
-                <button 
-                  onClick={toggleSelectAll}
-                  className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-sm font-bold text-slate-700 transition-all"
-                >
-                  {selectedStudentIds.length === students.length ? <CheckSquare size={16}/> : <Square size={16}/>}
-                  {selectedStudentIds.length === students.length ? '전체 해제' : '모두 선택'}
+                <button onClick={() => setSelectedStudentIds(selectedStudentIds.length === students.length ? [] : students.map(s => s.id))} className="text-xs font-bold text-slate-500 flex items-center gap-2">
+                  {selectedStudentIds.length === students.length ? <CheckSquare size={16}/> : <Square size={16}/>} 모두 선택
                 </button>
               </div>
-              
-              <div className="bg-indigo-50 p-6 rounded-2xl mb-6 flex flex-wrap items-center justify-between gap-4 border border-indigo-100">
-                <div className="flex items-center gap-3">
-                  <span className="bg-indigo-600 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs">{selectedStudentIds.length}</span>
-                  <p className="font-bold text-indigo-900">명이 선택되었습니다.</p>
-                </div>
-                <div className="flex gap-2 w-full sm:w-auto">
-                  <input type="number" id="specificAmount" placeholder="금액 입력" className="flex-1 sm:w-32 p-3 border rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-600" />
-                  <button onClick={() => handleMassTransaction(Number((document.getElementById('specificAmount') as HTMLInputElement).value), false, selectedStudentIds)} className="bg-indigo-600 text-white px-6 py-3 rounded-xl text-sm font-bold hover:shadow-lg transition-all">수당 지급</button>
-                  <button onClick={() => handleMassTransaction(Number((document.getElementById('specificAmount') as HTMLInputElement).value), true, selectedStudentIds)} className="bg-red-500 text-white px-6 py-3 rounded-xl text-sm font-bold hover:shadow-lg transition-all">범칙금 부과</button>
-                </div>
+              <div className="bg-slate-50 p-4 rounded-xl flex gap-3 mb-4">
+                <input type="number" id="ecoAmt" placeholder="금액 입력" className="flex-1 p-2 border rounded-xl" />
+                <button onClick={() => handleMassTransaction(Number((document.getElementById('ecoAmt') as HTMLInputElement).value), false, selectedStudentIds)} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-bold">수당 지급</button>
+                <button onClick={() => handleMassTransaction(Number((document.getElementById('ecoAmt') as HTMLInputElement).value), true, selectedStudentIds)} className="bg-red-500 text-white px-4 py-2 rounded-xl text-sm font-bold">범칙금 부과</button>
               </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3 max-h-[300px] overflow-y-auto p-2 scrollbar-hide">
+              <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-7 gap-2">
                 {students.map(s => (
-                  <button 
-                    key={s.id} 
-                    onClick={() => setSelectedStudentIds(prev => prev.includes(s.id) ? prev.filter(id => id !== s.id) : [...prev, s.id])}
-                    className={`p-3 rounded-xl border-2 text-sm font-bold transition-all relative ${selectedStudentIds.includes(s.id) ? 'border-indigo-600 bg-indigo-50 text-indigo-700 shadow-sm' : 'border-slate-100 text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    {s.name}
-                    {selectedStudentIds.includes(s.id) && <Check size={12} className="absolute top-1 right-1 text-indigo-600" />}
-                  </button>
+                  <button key={s.id} onClick={() => setSelectedStudentIds(p => p.includes(s.id) ? p.filter(id => id !== s.id) : [...p, s.id])} className={`p-2 rounded-lg border text-xs font-bold ${selectedStudentIds.includes(s.id) ? 'bg-indigo-600 text-white' : 'bg-white'}`}>{s.name}</button>
                 ))}
               </div>
             </div>
           </div>
         )}
 
-        {/* 환경 설정 탭 */}
-        {activeTab === 'settings' && (
-          <div className="bg-white p-8 rounded-2xl border shadow-sm space-y-10">
-            <h2 className="text-2xl font-black text-slate-800">환경 설정</h2>
-            
-            <section className="space-y-4">
-              <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                <Edit3 size={14}/> 학급 기본 정보
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="p-6 bg-slate-50 rounded-2xl space-y-3">
-                  <label className="text-xs font-bold text-slate-500 block">학급 이름</label>
-                  <div className="flex gap-2">
-                    <input 
-                      type="text" 
-                      defaultValue={settings.class_name} 
-                      onBlur={(e) => updateSessionSetting({ class_name: e.target.value })}
-                      placeholder="우리 반 이름을 정해주세요"
-                      className="flex-1 bg-white border p-3 rounded-xl font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none transition-all" 
-                    />
+        {activeTab === 'logs' && (
+          <div className="bg-white p-6 rounded-2xl border shadow-sm">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold flex items-center gap-2"><History size={20}/> 로그 관리</h2>
+              <select value={logFilter} onChange={(e)=>setLogFilter(e.target.value)} className="p-2 border rounded-xl text-xs font-bold outline-none">
+                <option value="all">모든 내역</option>
+                <option value="transfer">송금 내역</option>
+                <option value="tax">세금 징수</option>
+                <option value="salary">주급 지급</option>
+                <option value="fine">범칙금 부과</option>
+                <option value="reward">수당 지급</option>
+              </select>
+            </div>
+            <div className="space-y-2 max-h-[600px] overflow-y-auto pr-2">
+              {logs.map(log => (
+                <div key={log.id} className="p-3 bg-slate-50 rounded-xl flex justify-between items-center text-xs">
+                  <div>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold mr-2 ${log.type === 'tax' ? 'bg-red-100 text-red-600' : 'bg-indigo-100 text-indigo-600'}`}>{log.type.toUpperCase()}</span>
+                    <span className="font-bold text-slate-800">{log.sender_name} → {log.receiver_name}</span>
+                    <p className="text-slate-400 mt-0.5">{log.description}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-black text-slate-900">{log.amount.toLocaleString()}원</p>
+                    <p className="text-[10px] text-slate-300">{new Date(log.created_at).toLocaleString()}</p>
                   </div>
                 </div>
-                <div className="p-6 bg-slate-50 rounded-2xl space-y-3">
-                  <label className="text-xs font-bold text-slate-500 block">학급 수준</label>
-                  <select 
-                    value={settings.school_level} 
-                    onChange={(e) => updateSessionSetting({ school_level: e.target.value as any })} 
-                    className="w-full p-3 bg-white border rounded-xl font-bold outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
-                  >
-                    <option value="elementary">초등학생</option>
-                    <option value="middle">중학생</option>
-                    <option value="high">고등학생</option>
-                  </select>
-                </div>
-              </div>
-            </section>
-
-            <section className="space-y-4">
-              <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                <RefreshCw size={14}/> 세션 제어
-              </h3>
-              <div className="p-6 bg-indigo-50 rounded-2xl border border-indigo-100 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-bold text-indigo-400 uppercase">현재 접속 세션 코드</p>
-                  <p className="text-2xl font-black text-indigo-700 font-mono tracking-tighter mt-1">{settings.session_code}</p>
-                </div>
-                <button 
-                  onClick={() => confirm('코드를 재발행하면 기존 학생들의 로그인이 풀릴 수 있습니다. 진행할까요?') && updateSessionSetting({ session_code: Math.random().toString(36).substring(2, 8).toUpperCase() })} 
-                  className="p-4 bg-white text-indigo-600 rounded-2xl shadow-sm hover:shadow-md transition-all active:scale-95"
-                >
-                  <RefreshCw size={20}/>
-                </button>
-              </div>
-            </section>
-          </div>
-        )}
-
-        {/* 개별 추가 모달 */}
-        {showAddModal && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl border border-slate-100">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold">학생 개별 추가</h3>
-                <button onClick={()=>setShowAddModal(false)} className="text-slate-400 hover:text-slate-600"><X size={24}/></button>
-              </div>
-              <div className="space-y-5">
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 ml-1">학년</label>
-                    <input type="number" value={newStudent.grade} onChange={(e)=>setNewStudent({...newStudent, grade: e.target.value})} className="p-3 border rounded-xl w-full font-bold focus:ring-2 focus:ring-indigo-500 outline-none"/>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 ml-1">반</label>
-                    <input type="number" value={newStudent.class} onChange={(e)=>setNewStudent({...newStudent, class: e.target.value})} className="p-3 border rounded-xl w-full font-bold focus:ring-2 focus:ring-indigo-500 outline-none"/>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 ml-1">번호</label>
-                    <input type="number" value={newStudent.number} onChange={(e)=>setNewStudent({...newStudent, number: e.target.value})} className="p-3 border rounded-xl w-full font-bold focus:ring-2 focus:ring-indigo-500 outline-none"/>
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-400 ml-1">성함</label>
-                  <input type="text" placeholder="이름 입력" value={newStudent.name} onChange={(e)=>setNewStudent({...newStudent, name: e.target.value})} className="p-4 border rounded-2xl w-full font-bold focus:ring-2 focus:ring-indigo-500 outline-none text-lg"/>
-                </div>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-dashed border-slate-200">
-                  <p className="text-[10px] text-slate-400 font-bold mb-1 italic">* 미리보기 학번 (ID)</p>
-                  <p className="font-mono font-black text-indigo-600 text-center text-xl">
-                    {newStudent.grade}{String(newStudent.class).padStart(2, '0')}{String(newStudent.number).padStart(2, '0')}
-                  </p>
-                </div>
-                <button 
-                  onClick={async () => {
-                    const id = `${newStudent.grade}${String(newStudent.class).padStart(2, '0')}${String(newStudent.number).padStart(2, '0')}`;
-                    const { error } = await supabase.from('students').insert({
-                      id, grade: newStudent.grade, class: newStudent.class, number: newStudent.number, name: newStudent.name,
-                      teacher_id: teacherId, session_code: activeSession.session_code, salary: 0, balance: 0, bank_balance: 0, brokerage_balance: 0, password: ''
-                    });
-                    if (error) alert('등록 중 오류가 발생했습니다. (학번 중복 등)');
-                    else { setShowAddModal(false); setNewStudent({ grade: '', class: '', number: '', name: '' }); fetchData(); }
-                  }} 
-                  className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold text-lg shadow-lg hover:bg-indigo-700 transition-all active:scale-95"
-                >
-                  명단에 등록하기
-                </button>
-              </div>
+              ))}
             </div>
           </div>
         )}
 
-        {/* 나머지 탭 (마켓, 퀴즈 등)도 비슷하게 구현되어 있음 */}
+        {activeTab === 'settings' && (
+          <div className="bg-white p-8 rounded-2xl border shadow-sm space-y-8">
+            <h2 className="text-2xl font-black">환경 설정</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <h3 className="font-bold text-slate-500 text-xs uppercase">학급 기본 정보</h3>
+                <input type="text" id="clsName" defaultValue={settings.class_name} className="w-full p-3 bg-slate-50 border rounded-xl font-bold" />
+                <select id="clsLv" defaultValue={settings.school_level} className="w-full p-3 bg-slate-50 border rounded-xl font-bold">
+                  <option value="elementary">초등학생</option><option value="middle">중학생</option><option value="high">고등학생</option>
+                </select>
+                <button onClick={() => updateSessionSetting({ class_name: (document.getElementById('clsName') as HTMLInputElement).value, school_level: (document.getElementById('clsLv') as HTMLSelectElement).value as any })} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2"><Save size={18}/> 설정 저장하기</button>
+              </div>
+              <div className="space-y-4">
+                <h3 className="font-bold text-slate-500 text-xs uppercase">세션 코드 관리</h3>
+                <input type="text" id="sCode" defaultValue={settings.session_code} className="w-full p-3 bg-slate-50 border rounded-xl font-bold font-mono" />
+                <button onClick={() => updateSessionSetting({ session_code: (document.getElementById('sCode') as HTMLInputElement).value })} className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold">코드 수동 변경</button>
+                <button onClick={() => updateSessionSetting({ session_code: Math.random().toString(36).substring(2, 8).toUpperCase() })} className="w-full text-indigo-600 text-xs font-bold py-2">랜덤 코드 재발행</button>
+              </div>
+            </div>
+            <div className="pt-10 border-t flex justify-end">
+              <button onClick={deleteCurrentClass} className="bg-red-50 text-red-500 px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-red-500 hover:text-white transition-all"><Trash2 size={18}/> 이 학급 완전히 삭제하기</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -4,7 +4,8 @@ import { KeyRound, Hash, LogIn, Mail, UserPlus, Fingerprint } from 'lucide-react
 import { supabase } from '../services/supabaseClient';
 
 interface Props {
-  onLogin: (role: 'teacher' | 'student', id: string) => void;
+  // Fix: Added optional name parameter to match the callback signature in App.tsx
+  onLogin: (role: 'teacher' | 'student', id: string, name?: string) => void;
 }
 
 const LoginScreen: React.FC<Props> = ({ onLogin }) => {
@@ -48,7 +49,11 @@ const LoginScreen: React.FC<Props> = ({ onLogin }) => {
       } else {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        if (data.user) onLogin('teacher', data.user.email || data.user.id);
+        // Fix: Extract user name and pass it to onLogin
+        if (data.user) {
+          const name = data.user.user_metadata?.full_name || data.user.email?.split('@')[0];
+          onLogin('teacher', data.user.email || data.user.id, name);
+        }
       }
     } catch (error: any) {
       alert(`오류: ${error.message}`);
@@ -85,7 +90,8 @@ const LoginScreen: React.FC<Props> = ({ onLogin }) => {
         throw new Error('비밀번호가 일치하지 않습니다.');
       }
 
-      onLogin('student', student.id);
+      // Fix: Pass the student name as the third argument
+      onLogin('student', student.id, student.name);
     } catch (error: any) {
       alert(error.message);
     } finally {
