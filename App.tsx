@@ -7,18 +7,21 @@ import LoginScreen from './components/LoginScreen';
 import { supabase } from './services/supabaseClient';
 
 const App: React.FC = () => {
-  const [user, setUser] = useState<{ role: 'teacher' | 'student'; id: string } | null>(null);
+  const [user, setUser] = useState<{ role: 'teacher' | 'student'; id: string; name?: string } | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
 
   useEffect(() => {
-    // 1. 초기 세션 확인
     const initSession = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (session?.user) {
-          setUser({ role: 'teacher', id: session.user.email || session.user.id });
+          const name = session.user.user_metadata?.full_name || session.user.email?.split('@')[0];
+          setUser({ 
+            role: 'teacher', 
+            id: session.user.email || session.user.id,
+            name: name
+          });
         } else {
-          // 학생 로그인은 로컬스토리지 우선 확인
           const savedUser = localStorage.getItem('app_user');
           if (savedUser) {
             const parsed = JSON.parse(savedUser);
@@ -34,10 +37,14 @@ const App: React.FC = () => {
     
     initSession();
 
-    // 2. Auth 상태 변화 구독 (구글 로그인 완료 후 자동 실행됨)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (session?.user) {
-        const newUser = { role: 'teacher' as const, id: session.user.email || session.user.id };
+        const name = session.user.user_metadata?.full_name || session.user.email?.split('@')[0];
+        const newUser = { 
+          role: 'teacher' as const, 
+          id: session.user.email || session.user.id,
+          name: name
+        };
         setUser(newUser);
         localStorage.setItem('app_user', JSON.stringify(newUser));
       } else if (event === 'SIGNED_OUT') {
@@ -49,8 +56,8 @@ const App: React.FC = () => {
     return () => subscription.unsubscribe();
   }, []);
 
-  const handleLogin = (role: 'teacher' | 'student', id: string) => {
-    const newUser = { role, id };
+  const handleLogin = (role: 'teacher' | 'student', id: string, name?: string) => {
+    const newUser = { role, id, name };
     setUser(newUser);
     localStorage.setItem('app_user', JSON.stringify(newUser));
   };
@@ -65,7 +72,6 @@ const App: React.FC = () => {
     }
   };
 
-  // 배경에 따라 색상이 변하는 푸터 컴포넌트
   const Footer = ({ isDarkBg = false }: { isDarkBg?: boolean }) => (
     <footer className={`mt-auto py-8 text-center text-[11px] w-full ${isDarkBg ? 'text-indigo-100/70' : 'text-slate-500 border-t border-slate-200 bg-white/80 backdrop-blur-md'}`}>
       <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 px-4 max-w-7xl mx-auto font-medium">
@@ -121,7 +127,9 @@ const App: React.FC = () => {
           <span className="font-black text-xl tracking-tight text-slate-800">ClassEconomy</span>
         </div>
         <div className="flex items-center gap-4">
-          <span className="text-sm font-bold text-slate-700 hidden sm:block">{user.id}</span>
+          <span className="text-sm font-bold text-slate-700 hidden sm:block">
+            {user.role === 'teacher' ? `${user.name || user.id} 선생님` : user.id}
+          </span>
           <button onClick={handleLogout} className="text-sm font-bold text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1">
             <LogOut size={18}/> 로그아웃
           </button>
