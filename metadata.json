@@ -1,0 +1,7 @@
+{
+  "name": "ClassEconomy - Student Management System",
+  "description": "A comprehensive classroom economy management tool featuring banking, investment, marketplace, real estate, and AI-powered quizzes.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
