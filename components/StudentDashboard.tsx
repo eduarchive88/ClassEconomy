@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { 
-  Wallet, Landmark, LineChart, ShoppingBag, Map, Send, Search, History, HelpCircle, CheckCircle2, Clock
+  Wallet, Landmark, LineChart, ShoppingBag, Map, Send, Search, History, HelpCircle, CheckCircle2, Clock, User
 } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
 import { Student, Transaction, Quiz, SavingsRecord } from '../types';
@@ -11,7 +11,7 @@ interface Props {
 }
 
 const StudentDashboard: React.FC<Props> = ({ studentId }) => {
-  const [activeTab, setActiveTab] = useState('home');
+  const [activeTab, setActiveTab] = useState('transfer'); // 기본 탭을 송금으로 변경
   const [student, setStudent] = useState<Student | null>(null);
   const [friends, setFriends] = useState<Student[]>([]);
   const [logs, setLogs] = useState<Transaction[]>([]);
@@ -21,8 +21,9 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
   const [dailyQuizzes, setDailyQuizzes] = useState<Quiz[]>([]);
   const [solvedQuizIds, setSolvedQuizIds] = useState<string[]>([]);
   
-  // 이체 관련
+  // 이체 및 송금 관련
   const [transferAmount, setTransferAmount] = useState(0);
+  const [selectedRecipientId, setSelectedRecipientId] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
@@ -73,15 +74,12 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
         const interestAmount = Math.floor(st.bank_balance * weeklyRate);
 
         if (interestAmount > 0) {
-          // 이자 지급 처리
           await supabase.from('students').update({ bank_balance: st.bank_balance + interestAmount }).eq('id', st.id);
           await supabase.from('transactions').insert({
             session_code: st.session_code, sender_id: 'GOVERNMENT', sender_name: '정부',
             receiver_id: st.id, receiver_name: st.name, amount: interestAmount, type: 'interest',
             description: '자동 주간 이자 지급 (연 2%)'
           });
-          
-          // 데이터 리프레시
           const { data: updatedSt } = await supabase.from('students').select('*').eq('id', studentId).single();
           if (updatedSt) setStudent(updatedSt);
         }
@@ -163,6 +161,43 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
     finally { setIsLoading(false); }
   };
 
+  const handleSendMoney = async () => {
+    if (!student || transferAmount <= 0 || !selectedRecipientId) return alert('정보를 모두 입력해주세요.');
+    if (student.balance < transferAmount) return alert('현금이 부족합니다.');
+
+    const recipient = selectedRecipientId === 'GOVERNMENT' ? { id: 'GOVERNMENT', name: '정부' } : friends.find(f => f.id === selectedRecipientId);
+    if (!recipient) return alert('받는 사람을 찾을 수 없습니다.');
+
+    if (!confirm(`${recipient.name}님에게 ${transferAmount.toLocaleString()}원을 송금할까요?`)) return;
+
+    setIsLoading(true);
+    try {
+      // 1. 보낸 사람 차감
+      await supabase.from('students').update({ balance: student.balance - transferAmount }).eq('id', studentId);
+      
+      // 2. 받는 사람 증액 (정부가 아닐 경우만)
+      if (selectedRecipientId !== 'GOVERNMENT') {
+        const { data: rTarget } = await supabase.from('students').select('balance').eq('id', selectedRecipientId).single();
+        if (rTarget) {
+          await supabase.from('students').update({ balance: rTarget.balance + transferAmount }).eq('id', selectedRecipientId);
+        }
+      }
+
+      // 3. 로그 작성
+      await supabase.from('transactions').insert({
+        session_code: student.session_code, sender_id: student.id, sender_name: student.name,
+        receiver_id: recipient.id, receiver_name: recipient.name, amount: transferAmount, type: 'transfer',
+        description: `${recipient.name}님에게 송금`
+      });
+
+      alert('송금 완료!');
+      setTransferAmount(0);
+      setSelectedRecipientId('');
+      fetchStudentData();
+    } catch (e) { alert('송금 중 오류가 발생했습니다.'); }
+    finally { setIsLoading(false); }
+  };
+
   const handleQuizSolve = async (quiz: Quiz, selectedIdx: number) => {
     if (solvedQuizIds.includes(quiz.id)) return alert('이미 오늘 참여한 퀴즈입니다.');
     
@@ -207,56 +242,125 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
         </div>
       )}
 
-      <nav className="flex bg-white p-1 rounded-2xl border sticky top-20 z-40">
-        {['home', 'invest', 'quiz', 'market', 'estate'].map(id => (
-          <button key={id} onClick={() => setActiveTab(id)} className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500'}`}>
-            {id === 'home' && <Wallet size={16}/>}{id === 'invest' && <LineChart size={16}/>}{id === 'quiz' && <HelpCircle size={16}/>}
-            <span className="capitalize">{id === 'home' ? '홈' : id === 'invest' ? '투자/저축' : id === 'quiz' ? '일일퀴즈' : id}</span>
+      <nav className="flex bg-white p-1 rounded-2xl border sticky top-20 z-40 overflow-x-auto no-scrollbar">
+        {[
+          { id: 'transfer', label: '송금', icon: <Send size={16}/> },
+          { id: 'bank', label: '은행 저축', icon: <Landmark size={16}/> },
+          { id: 'invest', label: '증권 투자', icon: <LineChart size={16}/> },
+          { id: 'quiz', label: '일일퀴즈', icon: <HelpCircle size={16}/> },
+          { id: 'market', label: '상점', icon: <ShoppingBag size={16}/> },
+          { id: 'estate', label: '부동산', icon: <Map size={16}/> },
+        ].map(tab => (
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex-1 min-w-[80px] flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === tab.id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500'}`}>
+            {tab.icon} <span>{tab.label}</span>
           </button>
         ))}
       </nav>
 
-      {activeTab === 'invest' && (
-        <div className="bg-white p-8 rounded-2xl border shadow-sm space-y-8">
+      {/* 송금 탭 */}
+      {activeTab === 'transfer' && (
+        <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
+          <div className="text-center">
+            <h2 className="text-2xl font-black text-slate-800">현금 송금하기 💸</h2>
+            <p className="text-sm text-slate-400 mt-1">친구에게 고마움을 표시하거나 거래를 하세요.</p>
+          </div>
+          <div className="max-w-md mx-auto space-y-5">
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-500 ml-1">받는 사람 선택</label>
+              <select value={selectedRecipientId} onChange={(e)=>setSelectedRecipientId(e.target.value)} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:ring-2 focus:ring-indigo-600">
+                <option value="">누구에게 보낼까요?</option>
+                <option value="GOVERNMENT">정부 (선생님)</option>
+                {friends.map(f => <option key={f.id} value={f.id}>{f.id} {f.name}</option>)}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-500 ml-1">송금할 금액</label>
+              <div className="relative">
+                <input type="number" value={transferAmount} onChange={(e)=>setTransferAmount(Math.max(0, Number(e.target.value)))} className="w-full p-5 bg-slate-50 border rounded-2xl text-2xl font-black text-center outline-none focus:ring-2 focus:ring-indigo-600" placeholder="0" />
+                <span className="absolute right-6 top-6 font-bold text-slate-400">원</span>
+              </div>
+            </div>
+            <button onClick={handleSendMoney} disabled={isLoading} className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-xl hover:shadow-indigo-200 transition-all active:scale-95 disabled:opacity-50">
+              {isLoading ? '송금 중...' : '송금 완료'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 은행 저축 탭 */}
+      {activeTab === 'bank' && (
+        <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
           <div className="flex flex-col md:flex-row gap-8">
             <div className="flex-1 space-y-4">
-              <h3 className="text-lg font-bold">1. 자산 이동 경로 선택</h3>
+              <h3 className="text-lg font-bold flex items-center gap-2"><Landmark size={20} className="text-emerald-500"/> 은행 이용하기</h3>
               <div className="grid grid-cols-1 gap-3">
-                {[
-                  { id: 'b2bank', label: '현금 → 은행', from: 'balance', to: 'bank_balance', desc: '주간 이자 수익 (출금 7일 제한)' },
-                  { id: 'b2stock', label: '현금 → 증권', from: 'balance', to: 'brokerage_balance', desc: '투자 예수금 확보 (출금 7일 제한)' },
-                  { id: 'bank2b', label: '은행 → 현금', from: 'bank_balance', to: 'balance', desc: '저축액 출금' },
-                  { id: 'stock2b', label: '증권 → 현금', from: 'brokerage_balance', to: 'balance', desc: '투자금 회수' },
-                ].map(path => (
-                  <button key={path.id} onClick={() => {
-                    const fromInput = document.getElementById('fromAcc') as HTMLInputElement;
-                    const toInput = document.getElementById('toAcc') as HTMLInputElement;
-                    if(fromInput && toInput) { fromInput.value = path.from; toInput.value = path.to; }
-                  }} className="p-4 border rounded-2xl text-left hover:border-indigo-600 hover:bg-indigo-50 transition-all group">
-                    <p className="font-bold text-slate-800">{path.label}</p>
-                    <p className="text-[10px] text-slate-400 mt-1">{path.desc}</p>
-                  </button>
-                ))}
+                <button onClick={() => {(document.getElementById('bankFrom') as any).value = 'balance'; (document.getElementById('bankTo') as any).value = 'bank_balance';}} className="p-5 border rounded-2xl text-left hover:border-emerald-600 hover:bg-emerald-50 transition-all border-l-8 border-l-indigo-400">
+                  <p className="font-bold text-slate-800">현금 → 은행 (입금)</p>
+                  <p className="text-[11px] text-slate-400 mt-1">복리 이자 수익이 발생합니다. (7일 락업)</p>
+                </button>
+                <button onClick={() => {(document.getElementById('bankFrom') as any).value = 'bank_balance'; (document.getElementById('bankTo') as any).value = 'balance';}} className="p-5 border rounded-2xl text-left hover:border-emerald-600 hover:bg-emerald-50 transition-all border-l-8 border-l-emerald-400">
+                  <p className="font-bold text-slate-800">은행 → 현금 (출금)</p>
+                  <p className="text-[11px] text-slate-400 mt-1">현금을 찾아 실생활에 사용합니다.</p>
+                </button>
               </div>
             </div>
             <div className="flex-1 space-y-6">
-              <h3 className="text-lg font-bold">2. 이체 실행</h3>
+              <h3 className="text-lg font-bold">이체 실행</h3>
               <div className="space-y-4 p-6 bg-slate-50 rounded-3xl">
-                <input type="hidden" id="fromAcc" value="balance" />
-                <input type="hidden" id="toAcc" value="bank_balance" />
+                <input type="hidden" id="bankFrom" value="balance" />
+                <input type="hidden" id="bankTo" value="bank_balance" />
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400">이체할 금액</label>
-                  <input type="number" value={transferAmount} onChange={(e)=>setTransferAmount(Number(e.target.value))} className="w-full bg-white p-4 rounded-2xl text-2xl font-black text-center outline-none border focus:ring-2 focus:ring-indigo-600" />
+                  <input type="number" value={transferAmount} onChange={(e)=>setTransferAmount(Math.max(0, Number(e.target.value)))} className="w-full bg-white p-4 rounded-2xl text-2xl font-black text-center outline-none border focus:ring-2 focus:ring-emerald-600" />
                 </div>
                 <button onClick={() => {
-                  const fromVal = (document.getElementById('fromAcc') as HTMLInputElement).value;
-                  const toVal = (document.getElementById('toAcc') as HTMLInputElement).value;
+                  const fromVal = (document.getElementById('bankFrom') as HTMLInputElement).value;
+                  const toVal = (document.getElementById('bankTo') as HTMLInputElement).value;
                   handleAssetTransfer(fromVal, toVal);
-                }} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg hover:shadow-indigo-200 transition-all active:scale-95">이체하기</button>
+                }} className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-lg hover:bg-emerald-700 transition-all">실행하기</button>
               </div>
               <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 flex gap-3">
                 <Clock className="text-amber-600 shrink-0" size={18} />
-                <p className="text-[11px] text-amber-800 leading-relaxed font-bold">은행/증권으로 보낸 돈은 <strong>보낸 날로부터 정확히 7일</strong>이 지나야 다시 현금으로 가져올 수 있습니다.</p>
+                <p className="text-[11px] text-amber-800 font-bold">은행에 입금한 금액은 <strong>7일(1주)</strong> 동안 출금할 수 없습니다.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 증권 투자 탭 */}
+      {activeTab === 'invest' && (
+        <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
+          <div className="flex flex-col md:flex-row gap-8">
+            <div className="flex-1 space-y-4">
+              <h3 className="text-lg font-bold flex items-center gap-2"><LineChart size={20} className="text-amber-500"/> 증권 계좌 이용하기</h3>
+              <div className="grid grid-cols-1 gap-3">
+                <button onClick={() => {(document.getElementById('invFrom') as any).value = 'balance'; (document.getElementById('invTo') as any).value = 'brokerage_balance';}} className="p-5 border rounded-2xl text-left hover:border-amber-600 hover:bg-amber-50 transition-all border-l-8 border-l-indigo-400">
+                  <p className="font-bold text-slate-800">현금 → 증권 (예수금 확보)</p>
+                  <p className="text-[11px] text-slate-400 mt-1">투자를 위한 총알을 준비합니다. (7일 락업)</p>
+                </button>
+                <button onClick={() => {(document.getElementById('invFrom') as any).value = 'brokerage_balance'; (document.getElementById('invTo') as any).value = 'balance';}} className="p-5 border rounded-2xl text-left hover:border-amber-600 hover:bg-amber-50 transition-all border-l-8 border-l-amber-400">
+                  <p className="font-bold text-slate-800">증권 → 현금 (예수금 회수)</p>
+                  <p className="text-[11px] text-slate-400 mt-1">투자 자금을 현금으로 전환합니다.</p>
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 space-y-6">
+              <h3 className="text-lg font-bold">이체 실행</h3>
+              <div className="space-y-4 p-6 bg-slate-50 rounded-3xl">
+                <input type="hidden" id="invFrom" value="balance" />
+                <input type="hidden" id="invTo" value="brokerage_balance" />
+                <div className="space-y-2">
+                  <input type="number" value={transferAmount} onChange={(e)=>setTransferAmount(Math.max(0, Number(e.target.value)))} className="w-full bg-white p-4 rounded-2xl text-2xl font-black text-center outline-none border focus:ring-2 focus:ring-amber-600" />
+                </div>
+                <button onClick={() => {
+                  const fromVal = (document.getElementById('invFrom') as HTMLInputElement).value;
+                  const toVal = (document.getElementById('invTo') as HTMLInputElement).value;
+                  handleAssetTransfer(fromVal, toVal);
+                }} className="w-full py-4 bg-amber-600 text-white rounded-2xl font-black shadow-lg hover:bg-amber-700 transition-all">실행하기</button>
+              </div>
+              <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 flex gap-3">
+                <Clock className="text-amber-600 shrink-0" size={18} />
+                <p className="text-[11px] text-amber-800 font-bold">증권 계좌로 보낸 돈은 <strong>7일(1주)</strong> 동안 다시 가져올 수 없습니다.</p>
               </div>
             </div>
           </div>
@@ -306,7 +410,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
       )}
 
       <div className="bg-white p-6 rounded-2xl border shadow-sm mt-8">
-        <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><History size={18}/> 내 통장 기록</h3>
+        <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><History size={18}/> 최근 활동 내역</h3>
         <div className="space-y-3">
           {logs.map(log => {
             const isIncome = log.receiver_id === studentId;

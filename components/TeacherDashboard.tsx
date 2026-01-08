@@ -127,6 +127,30 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
     if (error) alert('저장 중 오류가 발생했습니다.');
   };
 
+  const handleIndividualQuizAdd = async () => {
+    if (!newQuiz.question || !newQuiz.o1 || !newQuiz.o2) {
+      alert('문제와 보기를 입력해주세요.');
+      return;
+    }
+    const { error } = await supabase.from('quizzes').insert({
+      question: newQuiz.question,
+      options: [newQuiz.o1, newQuiz.o2, newQuiz.o3, newQuiz.o4],
+      answer: newQuiz.ans,
+      reward: newQuiz.reward,
+      teacher_id: teacherId,
+      session_code: activeSession.session_code
+    });
+
+    if (error) {
+      alert(`저장 중 오류가 발생했습니다: ${error.message}`);
+    } else {
+      alert('퀴즈가 추가되었습니다.');
+      setShowQuizAddModal(false);
+      setNewQuiz({ question: '', o1: '', o2: '', o3: '', o4: '', ans: 1, reward: 1000 });
+      fetchData();
+    }
+  };
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
       <div className="bg-white p-4 rounded-2xl shadow-sm border h-fit sticky top-24 space-y-1">
@@ -333,7 +357,10 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
                 <button onClick={()=>setShowQuizAddModal(false)}><X size={24}/></button>
               </div>
               <div className="space-y-4">
-                <input type="text" placeholder="문제 내용" value={newQuiz.question} onChange={(e)=>setNewQuiz({...newQuiz, question: e.target.value})} className="w-full p-3 border rounded-xl font-bold" />
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-500 ml-1">문제</label>
+                  <input type="text" placeholder="문제를 입력하세요" value={newQuiz.question} onChange={(e)=>setNewQuiz({...newQuiz, question: e.target.value})} className="w-full p-3 border rounded-xl font-bold" />
+                </div>
                 <div className="grid grid-cols-2 gap-2">
                   <input type="text" placeholder="보기1" value={newQuiz.o1} onChange={(e)=>setNewQuiz({...newQuiz, o1: e.target.value})} className="p-2 border rounded-lg text-sm" />
                   <input type="text" placeholder="보기2" value={newQuiz.o2} onChange={(e)=>setNewQuiz({...newQuiz, o2: e.target.value})} className="p-2 border rounded-lg text-sm" />
@@ -341,19 +368,16 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
                   <input type="text" placeholder="보기4" value={newQuiz.o4} onChange={(e)=>setNewQuiz({...newQuiz, o4: e.target.value})} className="p-2 border rounded-lg text-sm" />
                 </div>
                 <div className="flex gap-4 items-center">
-                  <label className="text-xs font-bold">정답</label>
+                  <label className="text-xs font-bold">정답 번호</label>
                   <select value={newQuiz.ans} onChange={(e)=>setNewQuiz({...newQuiz, ans: Number(e.target.value)})} className="flex-1 p-2 border rounded-lg text-sm">
                     <option value={1}>1번</option><option value={2}>2번</option><option value={3}>3번</option><option value={4}>4번</option>
                   </select>
                 </div>
-                <input type="number" placeholder="보상 금액" value={newQuiz.reward} onChange={(e)=>setNewQuiz({...newQuiz, reward: Number(e.target.value)})} className="w-full p-3 border rounded-xl font-bold" />
-                <button onClick={async () => {
-                  const { error } = await supabase.from('quizzes').insert({
-                    question: newQuiz.question, options: [newQuiz.o1, newQuiz.o2, newQuiz.o3, newQuiz.o4],
-                    answer: newQuiz.ans, reward: newQuiz.reward, teacher_id: teacherId, session_code: activeSession.session_code
-                  });
-                  if(!error) { setShowQuizAddModal(false); fetchData(); }
-                }} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold shadow-lg">퀴즈 추가 완료</button>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-500 ml-1">보상금</label>
+                  <input type="number" placeholder="성공 시 지급할 금액" value={newQuiz.reward} onChange={(e)=>setNewQuiz({...newQuiz, reward: Number(e.target.value)})} className="w-full p-3 border rounded-xl font-bold" />
+                </div>
+                <button onClick={handleIndividualQuizAdd} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold shadow-lg transition-all hover:bg-indigo-700">퀴즈 추가 완료</button>
               </div>
             </div>
           </div>
