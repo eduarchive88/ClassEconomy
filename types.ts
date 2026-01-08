@@ -25,8 +25,16 @@ export interface Transaction {
   receiver_id: string;
   receiver_name: string;
   amount: number;
-  type: 'transfer' | 'tax' | 'salary' | 'market' | 'stock' | 'fine' | 'reward';
+  type: 'transfer' | 'tax' | 'salary' | 'market' | 'stock' | 'fine' | 'reward' | 'interest' | 'quiz';
   description: string;
+  created_at: string;
+}
+
+export interface SavingsRecord {
+  id: string;
+  student_id: string;
+  amount: number;
+  account_type: 'bank' | 'brokerage';
   created_at: string;
 }
 
@@ -50,10 +58,11 @@ export interface EconomySettings {
 export interface Quiz {
   id: string;
   question: string;
-  options: [string, string, string, string];
+  options: string[];
   answer: number;
   reward: number;
   teacher_id: string;
+  session_code: string;
 }
 
 export interface MarketItem {
