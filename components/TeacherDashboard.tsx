@@ -229,7 +229,6 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
               </div>
               <button onClick={() => updateSessionSetting(settings)} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all hover:bg-indigo-700"><Save size={20}/> 경제 자동화 설정 저장</button>
             </div>
-
             <div className="bg-white p-6 rounded-2xl border shadow-sm">
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl font-bold flex items-center gap-2"><Users size={20}/> 학생 수당/범칙금 부과</h2>
@@ -268,7 +267,7 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
             <div className="p-6 bg-indigo-50 rounded-2xl mb-6 border border-indigo-100 flex items-center justify-between gap-4">
               <div>
                 <label className="text-xs font-black text-indigo-900 mb-1 block">일일 퀴즈 제공 개수 (매일 자동 갱신)</label>
-                <p className="text-[10px] text-indigo-600">설정한 개수만큼 매일 오전 8시에 랜덤으로 학생들에게 노출됩니다.</p>
+                <p className="text-[10px] text-indigo-600">설정한 개수만큼 매일 자정(00:00)에 랜덤으로 학생들에게 노출됩니다.</p>
               </div>
               <div className="flex items-center gap-2">
                 <input type="number" value={settings.quiz_count_per_day} onChange={(e)=>setSettings({...settings, quiz_count_per_day: Math.min(10, Math.max(0, Number(e.target.value)))})} className="w-20 p-2 border rounded-xl font-black text-center outline-none focus:ring-2 focus:ring-indigo-600" />
@@ -278,23 +277,32 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
 
             <div className="space-y-3">
               {quizzes.map(q => (
-                <div key={q.id} className="p-4 border rounded-xl flex justify-between items-start hover:bg-slate-50 transition-colors">
+                <div key={q.id} className="p-5 border-2 border-slate-50 rounded-2xl flex justify-between items-start hover:bg-slate-50 transition-colors bg-white">
                   <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                       <p className="font-bold text-slate-800">{q.question}</p>
-                       {(q as any).usage_count > 0 && <span className="text-[9px] font-black px-1.5 py-0.5 bg-indigo-100 text-indigo-600 rounded border border-indigo-200 flex items-center gap-0.5"><Eye size={10}/> {(q as any).usage_count}회 출제됨</span>}
+                    <div className="flex items-center gap-2 mb-2 flex-wrap">
+                       <p className="font-bold text-slate-800 text-base">{q.question}</p>
+                       {(q as any).usage_count > 0 && (
+                         <span className="text-[10px] font-black px-2 py-1 bg-indigo-600 text-white rounded-lg flex items-center gap-1 shadow-sm">
+                           <Eye size={12}/> {(q as any).usage_count}회 출제됨
+                         </span>
+                       )}
+                       {(q as any).usage_count === 0 && (
+                         <span className="text-[10px] font-bold px-2 py-1 bg-slate-100 text-slate-400 rounded-lg border border-slate-200">
+                           미출제
+                         </span>
+                       )}
                     </div>
-                    <div className="grid grid-cols-2 gap-x-4 mt-2">
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-1 mt-3">
                       {q.options.map((opt, i) => (
-                        <p key={i} className={`text-xs ${q.answer === i + 1 ? 'text-indigo-600 font-bold' : 'text-slate-400'}`}>
+                        <p key={i} className={`text-xs ${q.answer === i + 1 ? 'text-indigo-600 font-bold' : 'text-slate-500'}`}>
                           {i + 1}. {opt} {q.answer === i + 1 && ' (정답)'}
                         </p>
                       ))}
                     </div>
                   </div>
-                  <div className="flex flex-col items-end gap-2">
-                    <span className="text-xs font-black text-emerald-600">{q.reward.toLocaleString()}원</span>
-                    <button onClick={async () => { if(confirm('삭제하시겠습니까?')) { await supabase.from('quizzes').delete().eq('id', q.id); fetchData(); } }} className="text-slate-300 hover:text-red-500"><Trash2 size={16}/></button>
+                  <div className="flex flex-col items-end gap-3 ml-4">
+                    <span className="text-sm font-black text-emerald-600 bg-emerald-50 px-3 py-1 rounded-xl">₩{q.reward.toLocaleString()}</span>
+                    <button onClick={async () => { if(confirm('삭제하시겠습니까?')) { await supabase.from('quizzes').delete().eq('id', q.id); fetchData(); } }} className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"><Trash2 size={18}/></button>
                   </div>
                 </div>
               ))}

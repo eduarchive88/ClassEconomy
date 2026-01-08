@@ -29,7 +29,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
   const [selectedRecipientIds, setSelectedRecipientIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  // 이체 경로 선택 상태 (은행/투자)
+  // 이체 경로 선택 상태
   const [bankPath, setBankPath] = useState<{from: string, to: string} | null>(null);
   const [investPath, setInvestPath] = useState<{from: string, to: string} | null>(null);
 
@@ -56,7 +56,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
         finally { setIsLoading(false); }
       };
       loadInvestData();
-      const timer = setInterval(loadInvestData, 3600000);
+      const timer = setInterval(loadInvestData, 3600000); // 1시간
       return () => clearInterval(timer);
     }
   }, [activeTab]);
@@ -76,7 +76,6 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
       if (sv) setSavings(sv);
       
       checkAndApplyAutoInterest(st, tx || []);
-      
       if (activeTab === 'quiz') fetchQuizzes(st.session_code);
     }
   };
@@ -111,11 +110,10 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
     const count = settings?.quiz_count_per_day || 0;
     if (count <= 0) { setDailyQuizzes([]); return; }
     
+    // 자정(00:00) 기준 갱신 로직
     const now = new Date();
-    if (now.getHours() < 8) now.setDate(now.getDate() - 1);
     const dateStr = now.toISOString().split('T')[0];
     
-    // 퀴즈 목록 가져오기 (가중치 랜덤 선정 로직)
     const { data: allQuizzes } = await supabase.from('quizzes').select('*').eq('session_code', code);
     
     if (allQuizzes && allQuizzes.length > 0) {
@@ -125,7 +123,6 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
       };
       const rand = seededRandom(dateStr + code);
       
-      // 노출 빈도가 낮은 퀴즈에 가중치를 부여하여 정렬
       const sortedByUsage = [...allQuizzes].sort((a, b) => {
         const usageA = (a as any).usage_count || 0;
         const usageB = (b as any).usage_count || 0;
@@ -136,10 +133,9 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
       const selected = sortedByUsage.slice(0, count);
       setDailyQuizzes(selected);
 
-      // 선택된 퀴즈들의 노출 빈도 업데이트 (하루에 한 번만 실행되도록 로직 필요하나 여기서는 단순화)
+      // 노출 횟수 업데이트
       for (const q of selected) {
-        await supabase.rpc('increment_quiz_usage', { quiz_id: q.id }).catch(() => {
-          // RPC가 없는 경우 일반 update 시도
+        supabase.rpc('increment_quiz_usage', { quiz_id: q.id }).catch(() => {
           supabase.from('quizzes').update({ usage_count: ((q as any).usage_count || 0) + 1 }).eq('id', q.id);
         });
       }
@@ -212,9 +208,13 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
   };
 
   const handleQuizSolve = async (quiz: Quiz, selectedIdx: number) => {
-    if (solvedQuizIds.includes(quiz.id)) return alert('이미 오늘 참여한 퀴즈입니다.');
+    // 이미 푼 퀴즈인지 한 번 더 검증
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const { data: exists } = await supabase.from('quiz_attempts').select('id').eq('student_id', studentId).eq('quiz_id', quiz.id).eq('attempt_date', dateStr).single();
+    if (exists || solvedQuizIds.includes(quiz.id)) return alert('이미 오늘 참여한 퀴즈입니다.');
+
     const isCorrect = quiz.answer === selectedIdx;
-    const dateStr = new Date().toISOString().split('T')[0];
     await supabase.from('quiz_attempts').insert({ student_id: studentId, quiz_id: quiz.id, attempt_date: dateStr, is_correct: isCorrect });
     if (isCorrect) {
       alert(`정답입니다! ${quiz.reward.toLocaleString()}원이 지급되었습니다.`);
@@ -288,14 +288,12 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
         ))}
       </nav>
 
-      {/* 송금 탭 */}
       {activeTab === 'transfer' && (
         <div className="bg-white p-6 md:p-8 rounded-3xl border shadow-sm space-y-6">
           <div className="text-center">
             <h2 className="text-2xl font-black text-slate-800">현금 송금하기 💸</h2>
             <p className="text-sm text-slate-400 mt-1">친구들을 선택하고 송금할 금액을 정하세요.</p>
           </div>
-          
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <div className="space-y-4">
               <div className="flex justify-between items-center px-1">
@@ -303,24 +301,12 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
                 <button onClick={() => setSelectedRecipientIds(selectedRecipientIds.length === friends.length + 1 ? [] : ['GOVERNMENT', ...friends.map(f => f.id)])} className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">전체 선택</button>
               </div>
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-4 gap-2 max-h-[400px] overflow-y-auto p-4 bg-slate-50 rounded-2xl border border-dashed no-scrollbar">
-                <button 
-                  onClick={() => setSelectedRecipientIds(p => p.includes('GOVERNMENT') ? p.filter(id => id !== 'GOVERNMENT') : [...p, 'GOVERNMENT'])} 
-                  className={`py-3 px-1 rounded-xl border text-[11px] font-bold transition-all truncate ${selectedRecipientIds.includes('GOVERNMENT') ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-95' : 'bg-white text-slate-600 hover:border-indigo-200'}`}
-                >
-                  정부
-                </button>
+                <button onClick={() => setSelectedRecipientIds(p => p.includes('GOVERNMENT') ? p.filter(id => id !== 'GOVERNMENT') : [...p, 'GOVERNMENT'])} className={`py-3 px-1 rounded-xl border text-[11px] font-bold transition-all truncate ${selectedRecipientIds.includes('GOVERNMENT') ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-95' : 'bg-white text-slate-600 hover:border-indigo-200'}`}>정부</button>
                 {friends.map(f => (
-                  <button 
-                    key={f.id} 
-                    onClick={() => setSelectedRecipientIds(p => p.includes(f.id) ? p.filter(id => id !== f.id) : [...p, f.id])} 
-                    className={`py-3 px-1 rounded-xl border text-[11px] font-bold transition-all truncate ${selectedRecipientIds.includes(f.id) ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-95' : 'bg-white text-slate-600 hover:border-indigo-200'}`}
-                  >
-                    {f.name}
-                  </button>
+                  <button key={f.id} onClick={() => setSelectedRecipientIds(p => p.includes(f.id) ? p.filter(id => id !== f.id) : [...p, f.id])} className={`py-3 px-1 rounded-xl border text-[11px] font-bold transition-all truncate ${selectedRecipientIds.includes(f.id) ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-95' : 'bg-white text-slate-600 hover:border-indigo-200'}`}>{f.name}</button>
                 ))}
               </div>
             </div>
-
             <div className="space-y-6 flex flex-col justify-center bg-slate-50/50 p-6 rounded-2xl border">
               <div className="space-y-2">
                 <label className="text-xs font-bold text-slate-500 ml-1">송금할 금액 (1인당 기준)</label>
@@ -335,28 +321,18 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
                   <button onClick={() => setTransferAmount(0)} className="py-2 bg-red-50 border border-red-100 rounded-lg text-[11px] font-bold text-red-600 hover:bg-red-100 transition-all">초기화</button>
                 </div>
               </div>
-
               <div className="p-4 bg-white rounded-2xl border border-indigo-100 flex flex-col gap-1 shadow-sm">
-                <div className="flex justify-between text-sm font-bold text-slate-600">
-                  <span>선택 인원</span> <span>{selectedRecipientIds.length}명</span>
-                </div>
-                <div className="flex justify-between text-lg font-black text-indigo-600 border-t border-slate-100 pt-2 mt-1">
-                  <span>총 송금액</span> <span>{(transferAmount * selectedRecipientIds.length).toLocaleString()}원</span>
-                </div>
+                <div className="flex justify-between text-sm font-bold text-slate-600"><span>선택 인원</span> <span>{selectedRecipientIds.length}명</span></div>
+                <div className="flex justify-between text-lg font-black text-indigo-600 border-t border-slate-100 pt-2 mt-1"><span>총 송금액</span> <span>{(transferAmount * selectedRecipientIds.length).toLocaleString()}원</span></div>
               </div>
-
-              <button onClick={handleSendMoney} disabled={isLoading || selectedRecipientIds.length === 0} className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-xl hover:shadow-indigo-200 transition-all active:scale-95 disabled:opacity-50">
-                {isLoading ? '송금 처리 중...' : '송금 실행하기'}
-              </button>
+              <button onClick={handleSendMoney} disabled={isLoading || selectedRecipientIds.length === 0} className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-xl hover:shadow-indigo-200 transition-all active:scale-95 disabled:opacity-50">{isLoading ? '송금 처리 중...' : '송금 실행하기'}</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* 증권 투자 탭 */}
       {activeTab === 'invest' && (
         <div className="space-y-6">
-          {/* 투자용 예수금 이체 섹션 (복구) */}
           <div className="bg-white p-8 rounded-3xl border shadow-sm">
             <div className="flex flex-col md:flex-row gap-8">
               <div className="flex-1 space-y-4">
@@ -383,93 +359,86 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
                       ))}
                     </div>
                   </div>
-                  <button onClick={() => investPath ? handleAssetTransfer(investPath.from, investPath.to) : alert('이체 방향을 선택해주세요.')} className={`w-full py-4 rounded-2xl font-black shadow-lg transition-all ${investPath ? 'bg-amber-500 text-white hover:bg-amber-600 active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
-                    {investPath ? `${investPath.from === 'balance' ? '확보' : '회수'} 실행하기` : '방향을 먼저 선택하세요'}
-                  </button>
+                  <button onClick={() => investPath ? handleAssetTransfer(investPath.from, investPath.to) : alert('이체 방향을 선택해주세요.')} className={`w-full py-4 rounded-2xl font-black shadow-lg transition-all ${investPath ? 'bg-amber-500 text-white hover:bg-amber-600 active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>{investPath ? `${investPath.from === 'balance' ? '확보' : '회수'} 실행하기` : '방향을 먼저 선택하세요'}</button>
                 </div>
               </div>
             </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* 실시간 시세 (이동) */}
             <div className="lg:col-span-2 space-y-6">
               <div className="bg-white p-6 rounded-3xl border shadow-sm">
                 <div className="flex justify-between items-center mb-6">
                   <h3 className="text-xl font-black flex items-center gap-2"><TrendingUp className="text-indigo-600"/> 실시간 시장 정보</h3>
-                  <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400">
-                    <Clock size={12}/> 1시간 단위 자동 갱신
-                  </div>
+                  <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400"><Clock size={12}/> 1시간 단위 갱신</div>
                 </div>
                 
                 {isLoading && marketData.stocks.length === 0 ? (
                   <div className="py-20 flex flex-col items-center justify-center gap-4">
                     <div className="w-10 h-10 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin"></div>
-                    <p className="text-sm font-bold text-slate-400">구글 금융에서 최신 정보를 수집하는 중...</p>
+                    <p className="text-sm font-bold text-slate-400">구글 금융 실시간 데이터 수집 중...</p>
                   </div>
                 ) : (
                   <div className="space-y-8">
-                    <div>
-                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">주요 주식 종목 (KOSPI/NASDAQ)</h4>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                        {marketData.stocks.map((s, i) => {
-                          const isUp = s.change && (s.change.includes('+') || !s.change.includes('-'));
-                          return (
-                            <div key={i} className="p-4 bg-slate-50 rounded-2xl border hover:border-indigo-200 transition-all cursor-default shadow-sm">
-                              <p className="text-[10px] font-bold text-slate-400 mb-1">{s.name}</p>
-                              <p className="text-sm font-black text-slate-800">{s.price || '로딩 중'}</p>
-                              <p className={`text-[10px] font-bold mt-1 flex items-center gap-0.5 ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>
-                                {isUp ? <TrendingUp size={10}/> : <TrendingDown size={10}/>} {s.change || '0%'}
-                              </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {marketData.stocks.map((s, i) => {
+                        const isUp = s.change && (s.change.includes('+') || !s.change.includes('-'));
+                        const ticker = s.name.match(/\(([^)]+)\)/)?.[1] || s.ticker || 'STOCK';
+                        const displayName = s.name.replace(/\([^)]+\)/, '').trim();
+                        return (
+                          <div key={i} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-all flex flex-col justify-between h-44 relative overflow-hidden group">
+                            <div className="flex justify-between items-start mb-2">
+                              <div>
+                                <p className="text-xs font-black text-slate-900 leading-none mb-1">{ticker}</p>
+                                <p className="text-xs font-bold text-slate-400">{displayName}</p>
+                              </div>
+                              <span className="bg-slate-50 text-[10px] font-bold text-slate-500 px-2 py-1 rounded-lg border border-slate-100">korean_stock</span>
                             </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    <div>
-                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">가상자산 실시간 시세</h4>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        {marketData.coins.map((c, i) => {
-                          const isUp = c.change && (c.change.includes('+') || !c.change.includes('-'));
-                          return (
-                            <div key={i} className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100 hover:border-indigo-300 transition-all shadow-sm">
-                              <p className="text-[10px] font-bold text-indigo-400 mb-1">{c.name}</p>
-                              <p className="text-sm font-black text-slate-800">{c.price || '로딩 중'}</p>
-                              <p className={`text-[10px] font-bold mt-1 flex items-center gap-0.5 ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>
-                                {isUp ? <TrendingUp size={10}/> : <TrendingDown size={10}/>} {c.change || '0%'}
-                              </p>
+                            <div className="mt-auto">
+                              <h4 className="text-2xl font-black text-slate-900 tracking-tight">₩{s.price}</h4>
                             </div>
-                          );
-                        })}
-                      </div>
+                            <div className={`flex items-center justify-end gap-1 mt-2 font-black text-sm ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>
+                              {isUp ? <TrendingUp size={14} className="animate-bounce" /> : <TrendingDown size={14}/>} {s.change}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {marketData.coins.map((c, i) => {
+                        const isUp = c.change && (c.change.includes('+') || !c.change.includes('-'));
+                        const ticker = c.name.match(/\(([^)]+)\)/)?.[1] || 'CRYPTO';
+                        const displayName = c.name.replace(/\([^)]+\)/, '').trim();
+                        return (
+                          <div key={i} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-all flex flex-col justify-between h-44 border-indigo-50">
+                            <div className="flex justify-between items-start mb-2">
+                              <div>
+                                <p className="text-xs font-black text-indigo-600 leading-none mb-1">{ticker}</p>
+                                <p className="text-xs font-bold text-slate-400">{displayName}</p>
+                              </div>
+                              <span className="bg-indigo-50 text-[10px] font-bold text-indigo-400 px-2 py-1 rounded-lg border border-indigo-100">crypto</span>
+                            </div>
+                            <div className="mt-auto"><h4 className="text-2xl font-black text-slate-900 tracking-tight">₩{c.price}</h4></div>
+                            <div className={`flex items-center justify-end gap-1 mt-2 font-black text-sm ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>
+                              {isUp ? <TrendingUp size={14}/> : <TrendingDown size={14}/>} {c.change}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
               </div>
             </div>
-
-            {/* 오늘의 경제 뉴스 (이동) */}
             <div className="space-y-6">
               <div className="bg-white p-6 rounded-3xl border shadow-sm h-full">
                 <h3 className="text-xl font-black flex items-center gap-2 mb-6"><Newspaper className="text-amber-500"/> 오늘의 경제 뉴스</h3>
                 <div className="space-y-4">
                   {economyNews.map((news, i) => (
-                    <button 
-                      key={i} 
-                      onClick={() => { setSelectedNews(news); setNewsSummary(''); }}
-                      className="w-full text-left p-4 rounded-2xl border border-transparent hover:border-amber-200 hover:bg-amber-50 transition-all group"
-                    >
+                    <button key={i} onClick={() => { setSelectedNews(news); setNewsSummary(''); }} className="w-full text-left p-4 rounded-2xl border border-transparent hover:border-amber-200 hover:bg-amber-50 transition-all group">
                       <h4 className="text-sm font-bold text-slate-800 leading-snug mb-2 group-hover:text-amber-900 line-clamp-2">{news.title}</h4>
-                      <div className="flex items-center text-[10px] font-bold text-slate-400 group-hover:text-amber-600">
-                        자세히 보기 <ChevronRight size={12}/>
-                      </div>
+                      <div className="flex items-center text-[10px] font-bold text-slate-400 group-hover:text-amber-600">자세히 보기 <ChevronRight size={12}/></div>
                     </button>
                   ))}
-                  {economyNews.length === 0 && !isLoading && (
-                    <div className="py-20 text-center text-slate-400">
-                      <p className="text-xs font-bold">구글 뉴스에서 정보를 가져오고 있습니다.</p>
-                    </div>
-                  )}
+                  {economyNews.length === 0 && !isLoading && <div className="py-20 text-center text-slate-400"><p className="text-xs font-bold">구글 뉴스 수집 중...</p></div>}
                 </div>
               </div>
             </div>
@@ -477,46 +446,21 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
         </div>
       )}
 
-      {/* 뉴스 상세 모달 */}
       {selectedNews && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
             <div className="p-6 border-b flex justify-between items-start">
               <h3 className="text-xl font-black text-slate-800 pr-8">{selectedNews.title}</h3>
-              <button onClick={() => setSelectedNews(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors shrink-0">
-                <X size={20}/>
-              </button>
+              <button onClick={() => setSelectedNews(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors shrink-0"><X size={20}/></button>
             </div>
-            
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
               <div className="flex gap-3">
-                <button 
-                  onClick={handleSummarize}
-                  disabled={isSummarizing}
-                  className="flex-1 bg-indigo-600 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all disabled:opacity-50"
-                >
-                  {isSummarizing ? (
-                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                  ) : (
-                    <Sparkles size={20}/>
-                  )}
-                  {isSummarizing ? 'AI 분석 중...' : 'AI 뉴스 요약 정리'}
-                </button>
-                <a 
-                  href={selectedNews.url} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="px-6 bg-slate-100 text-slate-700 py-4 rounded-2xl font-black flex items-center justify-center gap-2 hover:bg-slate-200 transition-all"
-                >
-                  <ExternalLink size={20}/> 원본 보기
-                </a>
+                <button onClick={handleSummarize} disabled={isSummarizing} className="flex-1 bg-indigo-600 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all disabled:opacity-50">{isSummarizing ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <Sparkles size={20}/>} {isSummarizing ? 'AI 분석 중...' : 'AI 뉴스 요약 정리'}</button>
+                <a href={selectedNews.url} target="_blank" rel="noopener noreferrer" className="px-6 bg-slate-100 text-slate-700 py-4 rounded-2xl font-black flex items-center justify-center gap-2 hover:bg-slate-200 transition-all"><ExternalLink size={20}/> 원본 보기</a>
               </div>
-
               {newsSummary && (
                 <div className="p-6 bg-indigo-50 rounded-3xl border border-indigo-100">
-                  <h4 className="text-xs font-black text-indigo-400 mb-3 flex items-center gap-2 uppercase tracking-widest">
-                    <Sparkles size={12}/> AI 요약 결과 ({sessionSettings?.school_level === 'elementary' ? '초등' : sessionSettings?.school_level === 'middle' ? '중등' : '고등'} 수준)
-                  </h4>
+                  <h4 className="text-xs font-black text-indigo-400 mb-3 flex items-center gap-2 uppercase tracking-widest"><Sparkles size={12}/> AI 요약 결과 ({sessionSettings?.school_level === 'elementary' ? '초등' : sessionSettings?.school_level === 'middle' ? '중등' : '고등'} 수준)</h4>
                   <p className="text-slate-800 leading-relaxed font-medium whitespace-pre-wrap">{newsSummary}</p>
                 </div>
               )}
@@ -525,7 +469,6 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
         </div>
       )}
 
-      {/* 은행 저축 탭 */}
       {activeTab === 'bank' && (
         <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
           <div className="flex flex-col md:flex-row gap-8">
@@ -547,27 +490,20 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
               <div className="space-y-4 p-6 bg-slate-50 rounded-3xl border border-dashed">
                 <div className="space-y-2">
                   <input type="number" value={transferAmount} onChange={(e)=>setTransferAmount(Math.max(0, Number(e.target.value)))} className="w-full bg-white p-4 rounded-2xl text-2xl font-black text-center outline-none border focus:ring-2 focus:ring-emerald-600" placeholder="금액 입력" />
-                  <div className="grid grid-cols-3 gap-2 mt-2">
-                    {[50000, 10000, 5000].map(val => (
-                      <button key={val} onClick={() => addAmount(val)} className="py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-500 hover:bg-slate-50 transition-all">+{val.toLocaleString()}</button>
-                    ))}
-                  </div>
+                  <div className="grid grid-cols-3 gap-2 mt-2">{[50000, 10000, 5000].map(val => (<button key={val} onClick={() => addAmount(val)} className="py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-500 hover:bg-slate-50 transition-all">+{val.toLocaleString()}</button>))}</div>
                 </div>
-                <button onClick={() => bankPath ? handleAssetTransfer(bankPath.from, bankPath.to) : alert('이체 방향을 선택해주세요.')} className={`w-full py-4 rounded-2xl font-black shadow-lg transition-all ${bankPath ? 'bg-emerald-600 text-white hover:bg-emerald-700 active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
-                  {bankPath ? `${bankPath.from === 'balance' ? '입금' : '출금'} 실행하기` : '방향을 먼저 선택하세요'}
-                </button>
+                <button onClick={() => bankPath ? handleAssetTransfer(bankPath.from, bankPath.to) : alert('이체 방향을 선택해주세요.')} className={`w-full py-4 rounded-2xl font-black shadow-lg transition-all ${bankPath ? 'bg-emerald-600 text-white hover:bg-emerald-700 active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>{bankPath ? `${bankPath.from === 'balance' ? '입금' : '출금'} 실행하기` : '방향을 먼저 선택하세요'}</button>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* 일일 퀴즈 탭 (참여 완료 시 비활성화 적용) */}
       {activeTab === 'quiz' && (
         <div className="space-y-4">
           <div className="bg-indigo-600 text-white p-6 rounded-2xl shadow-lg relative overflow-hidden">
             <h2 className="text-xl font-black">오늘의 일일 퀴즈 💡</h2>
-            <p className="text-indigo-100 text-xs mt-1">매일 오전 8시에 새로운 퀴즈가 찾아옵니다! (중복 참여 불가)</p>
+            <p className="text-indigo-100 text-xs mt-1">매일 자정(00:00)에 새로운 퀴즈로 갱신됩니다! (중복 보상 불가)</p>
             <HelpCircle size={80} className="absolute -right-4 -bottom-4 opacity-10" />
           </div>
           <div className="grid grid-cols-1 gap-4">
@@ -582,21 +518,10 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
                   <h3 className="text-lg font-bold text-slate-800 mb-6 leading-tight">{quiz.question}</h3>
                   <div className="grid grid-cols-1 gap-2">
                     {quiz.options.map((opt, oIdx) => (
-                      <button 
-                        key={oIdx} 
-                        onClick={() => !solved && handleQuizSolve(quiz, oIdx + 1)} 
-                        disabled={solved} 
-                        className={`w-full p-4 rounded-xl text-left text-sm font-bold transition-all border-2 ${solved ? 'bg-slate-50 border-slate-100 cursor-not-allowed' : 'hover:border-indigo-600 hover:bg-indigo-50 border-slate-50'}`}
-                      >
-                        <span className="text-indigo-600 mr-2">{oIdx + 1}.</span> {opt}
-                      </button>
+                      <button key={oIdx} onClick={() => !solved && handleQuizSolve(quiz, oIdx + 1)} disabled={solved} className={`w-full p-4 rounded-xl text-left text-sm font-bold transition-all border-2 ${solved ? 'bg-slate-50 border-slate-100 cursor-not-allowed' : 'hover:border-indigo-600 hover:bg-indigo-50 border-slate-50'}`}><span className="text-indigo-600 mr-2">{oIdx + 1}.</span> {opt}</button>
                     ))}
                   </div>
-                  {solved && (
-                    <div className="mt-4 flex items-center justify-center gap-2 text-emerald-600 font-bold text-sm bg-emerald-50 py-3 rounded-xl border border-emerald-100">
-                      <CheckCircle2 size={18}/> 오늘 이미 참여한 퀴즈입니다
-                    </div>
-                  )}
+                  {solved && <div className="mt-4 flex items-center justify-center gap-2 text-emerald-600 font-bold text-sm bg-emerald-50 py-3 rounded-xl border border-emerald-100"><CheckCircle2 size={18}/> 이미 참여 완료한 퀴즈입니다</div>}
                 </div>
               );
             })}

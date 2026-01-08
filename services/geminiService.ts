@@ -39,15 +39,28 @@ export const summarizeNews = async (content: string, schoolLevel: string) => {
 
 export const getMarketData = async () => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const stocks = "삼성전자, 삼성SDI, 포스코홀딩스, 대한항공, LG전자, 현대자동차, 기아, NAVER, 카카오, LG화학, 셀트리온, Apple, Amazon, Netflix, Tesla, NVIDIA, Microsoft, Meta";
+  const stocks = "삼성전자, 삼성SDI, SK하이닉스, 포스코홀딩스, 대한항공, LG전자, 현대자동차, 기아, NAVER, 카카오, LG화학, 셀트리온, Apple, Amazon, Netflix, Tesla, NVIDIA, Microsoft, Meta";
   const coins = "비트코인(BTC), 이더리움(ETH), 리플(XRP)";
   
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: `지금 즉시 구글 금융(Google Finance)에 접속하여 다음 종목들의 가장 최신 현재가와 오늘 전일대비 등락률(%)을 확인해서 JSON으로 출력해줘.
+    contents: `구글 금융(Google Finance)과 최신 시장 지표를 검색하여 다음 종목들의 실시간 현재가와 전일 대비 등락률을 JSON 형식으로 알려줘.
+    반드시 현재 활성화된 장의 실제 가격을 가져와야 해.
+    
     주식: ${stocks}
     코인: ${coins}
-    정확한 가격 데이터를 가져와야 해. 응답 형식: { "stocks": [{ "name": string, "price": string, "change": string }], "coins": [...] }`,
+    
+    응답 JSON 구조:
+    {
+      "stocks": [
+        { "name": "기아(000270)", "ticker": "000270", "price": "124,900", "change": "-3.40%" },
+        ...
+      ],
+      "coins": [
+        { "name": "비트코인(BTC)", "ticker": "BTC", "price": "138,800,000", "change": "+1.56%" },
+        ...
+      ]
+    }`,
     config: {
       tools: [{ googleSearch: {} }],
       responseMimeType: "application/json",
@@ -60,6 +73,7 @@ export const getMarketData = async () => {
               type: Type.OBJECT,
               properties: {
                 name: { type: Type.STRING },
+                ticker: { type: Type.STRING },
                 price: { type: Type.STRING },
                 change: { type: Type.STRING }
               }
@@ -71,6 +85,7 @@ export const getMarketData = async () => {
               type: Type.OBJECT,
               properties: {
                 name: { type: Type.STRING },
+                ticker: { type: Type.STRING },
                 price: { type: Type.STRING },
                 change: { type: Type.STRING }
               }
@@ -82,8 +97,10 @@ export const getMarketData = async () => {
   });
 
   try {
-    return JSON.parse(response.text || "{\"stocks\": [], \"coins\": []}");
+    const text = response.text || "{\"stocks\": [], \"coins\": []}";
+    return JSON.parse(text.trim());
   } catch (e) {
+    console.error("Market Data Parse Error:", e);
     return { stocks: [], coins: [] };
   }
 };
@@ -92,7 +109,7 @@ export const getEconomyNews = async () => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: "지금 구글 뉴스(news.google.com)의 경제/금융 섹션에서 가장 중요한 뉴스 5개를 실시간으로 검색해서 알려줘. JSON 배열 형식: [{ 'title': string, 'url': string }]",
+    contents: "지금 구글 뉴스(news.google.com)의 경제/금융 섹션에서 가장 중요한 뉴스 5개를 실시간으로 검색해서 제목과 원문 URL을 알려줘. JSON 배열 형식: [{ 'title': string, 'url': string }]",
     config: {
       tools: [{ googleSearch: {} }],
       responseMimeType: "application/json",
@@ -110,8 +127,10 @@ export const getEconomyNews = async () => {
   });
   
   try {
-    return JSON.parse(response.text || "[]");
+    const text = response.text || "[]";
+    return JSON.parse(text.trim());
   } catch (e) {
+    console.error("News Parse Error:", e);
     return [];
   }
 };

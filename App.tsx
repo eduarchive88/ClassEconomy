@@ -81,7 +81,6 @@ const App: React.FC = () => {
     </div>
   );
 
-  // 교사용 학급 선택 화면
   if (user.role === 'teacher' && showPicker) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
@@ -141,10 +140,13 @@ const App: React.FC = () => {
           )}
         </div>
         <div className="flex items-center gap-4">
-          <span className="text-sm font-bold text-slate-700">
-            {user.role === 'teacher' ? `${user.name || user.id} 선생님` : `${user.id} ${user.name || ''} 환영해요!`}
-          </span>
-          <button onClick={handleLogout} className="text-xs font-bold text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg">로그아웃</button>
+          <div className="flex flex-col items-end">
+            <span className="text-sm font-black text-slate-800">
+              {user.role === 'teacher' ? `${user.name || user.id} 선생님` : `${user.id} ${user.name || ''}`}
+            </span>
+            <span className="text-[10px] font-bold text-indigo-500">환영해요!</span>
+          </div>
+          <button onClick={handleLogout} className="text-xs font-bold text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg border border-red-100">로그아웃</button>
         </div>
       </nav>
       <main className="flex-1 max-w-7xl mx-auto p-6 w-full">
