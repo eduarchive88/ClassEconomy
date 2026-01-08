@@ -1,10 +1,19 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
-// Generate quizzes using Gemini 3 Pro for complex reasoning tasks.
+// API Key를 안전하게 가져오는 헬퍼 (process.env.API_KEY 규칙을 준수하면서 에러 방지)
+const getSafeApiKey = () => {
+  try {
+    return process.env.API_KEY || '';
+  } catch (e) {
+    return '';
+  }
+};
+
 export const generateAIQuiz = async (topic: string, count: number, schoolLevel: string) => {
-  // Always initialize with API key from environment variables.
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getSafeApiKey();
+  const ai = new GoogleGenAI({ apiKey });
+  
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
     contents: `Topic: ${topic}. Level: ${schoolLevel}. Generate ${count} multiple choice quizzes.`,
@@ -26,20 +35,18 @@ export const generateAIQuiz = async (topic: string, count: number, schoolLevel: 
     }
   });
   
-  // Directly access the text property as per documentation.
   const text = response.text;
   if (!text) return [];
   return JSON.parse(text.trim());
 };
 
-// Summarize news using Gemini 3 Flash for basic text processing.
 export const summarizeNews = async (content: string, schoolLevel: string) => {
-  // Always initialize with API key from environment variables.
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getSafeApiKey();
+  const ai = new GoogleGenAI({ apiKey });
+  
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: `Summarize the following news article for a ${schoolLevel} student level: ${content}`,
   });
-  // Directly access the text property.
   return response.text || "";
 };

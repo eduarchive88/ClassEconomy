@@ -19,13 +19,19 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId }) => {
   // DB에서 학생 목록 불러오기
   const fetchStudents = async () => {
     setIsLoading(true);
-    const { data, error } = await supabase
-      .from('students')
-      .select('*')
-      .order('id', { ascending: true });
-    
-    if (data) setStudents(data);
-    setIsLoading(false);
+    try {
+      const { data, error } = await supabase
+        .from('students')
+        .select('*')
+        .order('id', { ascending: true });
+      
+      if (error) throw error;
+      if (data) setStudents(data);
+    } catch (err: any) {
+      console.error("Fetch error:", err.message);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -38,34 +44,38 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId }) => {
 
     const reader = new FileReader();
     reader.onload = async (evt) => {
-      const bstr = evt.target?.result;
-      const workbook = XLSX.read(bstr, { type: 'binary', codepage: 949 });
-      const ws = workbook.Sheets[workbook.SheetNames[0]];
-      const data = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[];
+      try {
+        const bstr = evt.target?.result;
+        const workbook = XLSX.read(bstr, { type: 'binary' });
+        const ws = workbook.Sheets[workbook.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[];
 
-      // FIX: Call await before the map callback to avoid 'await' inside synchronous function error
-      const { data: { user } } = await supabase.auth.getUser();
-      const currentTeacherId = user?.id;
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error("로그인 세션이 만료되었습니다.");
 
-      const studentData = data.slice(1).map(row => ({
-        grade: String(row[0]),
-        class: String(row[1]),
-        number: String(row[2]),
-        name: String(row[3]),
-        id: `${row[0]}${row[1]}${String(row[2]).padStart(2, '0')}`,
-        salary: Number(row[4] || 0),
-        password: String(row[2]), // 초기 비밀번호를 번호로 설정
-        balance: 0,
-        bank_balance: 0,
-        brokerage_balance: 0,
-        teacher_id: currentTeacherId
-      }));
+        const studentData = data.slice(1)
+          .filter(row => row[3]) // 이름이 있는 행만 처리
+          .map(row => ({
+            grade: String(row[0] || ''),
+            class: String(row[1] || ''),
+            number: String(row[2] || ''),
+            name: String(row[3] || ''),
+            id: `${row[0]}${row[1]}${String(row[2]).padStart(2, '0')}`,
+            salary: Number(row[4] || 0),
+            password: String(row[2] || '1234'), 
+            balance: 0,
+            bank_balance: 0,
+            brokerage_balance: 0,
+            teacher_id: user.id
+          }));
 
-      const { error } = await supabase.from('students').upsert(studentData);
-      if (error) alert('저장 실패: ' + error.message);
-      else {
-        alert('학생 명단이 성공적으로 등록되었습니다.');
+        const { error } = await supabase.from('students').upsert(studentData);
+        if (error) throw error;
+        
+        alert(`${studentData.length}명의 학생이 성공적으로 등록되었습니다.`);
         fetchStudents();
+      } catch (err: any) {
+        alert('저장 실패: ' + err.message);
       }
     };
     reader.readAsBinaryString(file);
@@ -141,7 +151,6 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId }) => {
           </div>
         )}
 
-        {/* Removed prohibited API key settings section to comply with Gemini API security guidelines */}
         {activeTab === 'settings' && (
           <div className="bg-white p-6 rounded-2xl border border-slate-200 space-y-6">
             <h2 className="text-xl font-bold">환경 설정</h2>
