@@ -1,9 +1,9 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Users, Landmark, ShoppingBag, BookOpen, Settings, Plus, 
   FileSpreadsheet, Map, CheckCircle, XCircle, Brain, 
-  TrendingUp, Download, Key
+  TrendingUp, Download, Key, Eye, EyeOff, Save
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -15,6 +15,9 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId }) => {
   const [activeTab, setActiveTab] = useState('students');
   const [students, setStudents] = useState<any[]>([]);
   const [sessionCode, setSessionCode] = useState('CLASS777');
+  const [userApiKey, setUserApiKey] = useState(localStorage.getItem('user_gemini_api_key') || '');
+  const [showApiKey, setShowApiKey] = useState(false);
+  
   const [pendingRealEstate, setPendingRealEstate] = useState([
     { id: 1, seatNum: 5, buyer: '김철수(60105)', price: 25000 },
   ]);
@@ -53,6 +56,11 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId }) => {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Sample");
     XLSX.writeFile(wb, `${type}_sample.xlsx`);
+  };
+
+  const handleSaveApiKey = () => {
+    localStorage.setItem('user_gemini_api_key', userApiKey);
+    alert('Gemini API 키가 안전하게 저장되었습니다.');
   };
 
   return (
@@ -134,8 +142,78 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId }) => {
               <h3 className="font-bold text-indigo-800">AI 퀴즈 자동 생성</h3>
               <p className="text-sm text-indigo-600 mb-4">주제만 입력하면 AI가 학년 수준에 맞는 퀴즈를 만듭니다.</p>
               <div className="flex max-w-md mx-auto gap-2">
-                <input type="text" placeholder="예: 경제 기동력, 인플레이션" className="flex-1 px-4 py-2 rounded-xl border-none shadow-sm" />
-                <button className="bg-indigo-600 text-white px-6 py-2 rounded-xl font-bold">생성</button>
+                <input type="text" placeholder="예: 경제 기동력, 인플레이션" className="flex-1 px-4 py-2 rounded-xl border-none shadow-sm outline-none focus:ring-2 focus:ring-indigo-500" />
+                <button className="bg-indigo-600 text-white px-6 py-2 rounded-xl font-bold hover:bg-indigo-700 transition-colors">생성</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'settings' && (
+          <div className="space-y-6">
+            <div className="bg-white p-6 rounded-2xl border border-slate-200">
+              <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
+                <Settings className="text-indigo-600" /> 시스템 설정
+              </h2>
+              
+              <div className="space-y-6">
+                {/* Gemini API Key 설정 섹션 */}
+                <div className="p-5 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Brain className="text-indigo-600" size={20} />
+                    <h3 className="font-bold text-slate-800">Gemini AI API 키 설정</h3>
+                  </div>
+                  <p className="text-sm text-slate-500 mb-4 leading-relaxed">
+                    AI 퀴즈 생성 및 뉴스 요약 기능을 사용하려면 Google Gemini API 키가 필요합니다. 
+                    입력하신 키는 브라우저에만 안전하게 보관됩니다.
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <div className="relative flex-1">
+                      <input 
+                        type={showApiKey ? "text" : "password"}
+                        value={userApiKey}
+                        onChange={(e) => setUserApiKey(e.target.value)}
+                        placeholder="AI API Key 입력 (AI Studio에서 발급)"
+                        className="w-full pl-4 pr-10 py-3 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-mono"
+                      />
+                      <button 
+                        onClick={() => setShowApiKey(!showApiKey)}
+                        className="absolute right-3 top-3.5 text-slate-400 hover:text-slate-600"
+                      >
+                        {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                    <button 
+                      onClick={handleSaveApiKey}
+                      className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition-colors shadow-sm"
+                    >
+                      <Save size={18} /> 저장
+                    </button>
+                  </div>
+                  <a 
+                    href="https://aistudio.google.com/app/apikey" 
+                    target="_blank" 
+                    className="text-[11px] text-indigo-600 mt-2 inline-block hover:underline"
+                  >
+                    내 API 키 확인하러 가기 (무료 사용 가능) &rarr;
+                  </a>
+                </div>
+
+                <div className="flex items-center justify-between p-5 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div>
+                    <h4 className="font-bold text-slate-800">세션 코드 변경</h4>
+                    <p className="text-xs text-slate-500">학생들의 로그인용 코드입니다.</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      value={sessionCode} 
+                      onChange={(e) => setSessionCode(e.target.value)}
+                      className="w-24 px-3 py-2 border rounded-lg text-center font-bold text-indigo-600 outline-none"
+                    />
+                    <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold shadow-sm">변경</button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
