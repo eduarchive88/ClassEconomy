@@ -86,7 +86,10 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
 
       if (quizData.length > 0) {
         const { error } = await supabase.from('quizzes').insert(quizData);
-        if (error) alert('퀴즈 업로드 오류!');
+        if (error) {
+           console.error("Bulk Quiz Insert Error:", error);
+           alert(`퀴즈 업로드 중 오류가 발생했습니다: ${error.message}\n(DB에 'session_code' 컬럼이 없는 경우 Supabase SQL Editor에서 alter table quizzes add column session_code text; 를 실행해야 할 수 있습니다.)`);
+        }
         else { alert(`${quizData.length}개의 퀴즈가 등록되었습니다.`); fetchData(); }
       }
     };
@@ -133,7 +136,7 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
       return;
     }
     
-    // session_code 컬럼 부재 시를 대비해 데이터 구조를 다시 한번 검증
+    // session_code를 명시적으로 포함하여 전송
     const quizToInsert = {
       question: newQuiz.question,
       options: [newQuiz.o1, newQuiz.o2, newQuiz.o3, newQuiz.o4],
@@ -147,7 +150,7 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
 
     if (error) {
       console.error("Quiz Insert Error:", error);
-      alert(`퀴즈 저장 중 오류가 발생했습니다: ${error.message}\n(DB에 'session_code' 컬럼이 있는지 확인이 필요할 수 있습니다.)`);
+      alert(`퀴즈 저장 중 오류가 발생했습니다: ${error.message}\n에러 메시지에 'column session_code not found'가 포함되어 있다면 DB 테이블 구조 업데이트가 필요합니다.`);
     } else {
       alert('퀴즈가 성공적으로 추가되었습니다.');
       setShowQuizAddModal(false);
