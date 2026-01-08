@@ -1,18 +1,9 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
-// API Key를 안전하게 가져오는 헬퍼 (process.env.API_KEY 규칙을 준수하면서 에러 방지)
-const getSafeApiKey = () => {
-  try {
-    return process.env.API_KEY || '';
-  } catch (e) {
-    return '';
-  }
-};
-
+// Use process.env.API_KEY directly as per the @google/genai guidelines
 export const generateAIQuiz = async (topic: string, count: number, schoolLevel: string) => {
-  const apiKey = getSafeApiKey();
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
@@ -41,8 +32,7 @@ export const generateAIQuiz = async (topic: string, count: number, schoolLevel: 
 };
 
 export const summarizeNews = async (content: string, schoolLevel: string) => {
-  const apiKey = getSafeApiKey();
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',

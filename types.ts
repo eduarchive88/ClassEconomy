@@ -58,5 +58,4 @@ export interface EconomySettings {
   school_level: SchoolLevel;
   auto_approve_estate: boolean;
   quiz_count_per_day: number;
-  gemini_api_key?: string;
 }
