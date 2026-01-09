@@ -104,13 +104,15 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
 
   const handleBuyItem = async (item: any) => {
     if (!student) return;
-    if (item.stock <= 0) return alert('재고가 없습니다.');
+    if (item.stock !== undefined && item.stock <= 0) return alert('재고가 없습니다.');
     if (student.balance < item.price) return alert('현금이 부족합니다.');
     if (!confirm(`${item.name}을(를) ${item.price.toLocaleString()}원에 구매하시겠습니까?`)) return;
 
     setIsLoading(true);
     try {
-      await supabase.from('market_items').update({ stock: item.stock - 1 }).eq('id', item.id);
+      if (item.stock !== undefined) {
+        await supabase.from('market_items').update({ stock: item.stock - 1 }).eq('id', item.id);
+      }
       await supabase.from('students').update({ balance: student.balance - item.price }).eq('id', studentId);
       await supabase.from('transactions').insert({
         session_code: student.session_code, sender_id: studentId, sender_name: student.name,
@@ -119,8 +121,6 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
       });
       alert('구매 완료!');
       fetchStudentData();
-      const { data } = await supabase.from('market_items').select('*').eq('teacher_id', student.teacher_id);
-      if (data) setMarketItems(data);
     } catch (e) { alert('오류 발생'); }
     finally { setIsLoading(false); }
   };
@@ -155,7 +155,6 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
     fetchStudentData();
   };
 
-  /* Fix: Added handleSendMoney function to process transfers to other students or government */
   const handleSendMoney = async () => {
     if (!student || transferAmount <= 0 || selectedRecipientIds.length === 0) return;
     const totalAmount = transferAmount * selectedRecipientIds.length;
@@ -171,7 +170,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
           const friend = friends.find(f => f.id === recipientId);
           if (friend) {
             receiverName = friend.name;
-            await supabase.rpc('increment_balance', { row_id: recipientId, amount: transferAmount });
+            await supabase.from('students').update({ balance: (friend.balance || 0) + transferAmount }).eq('id', recipientId);
           }
         }
         
@@ -226,70 +225,13 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
           { id: 'invest', label: '증권', icon: <LineChart size={16}/> },
           { id: 'market', label: '상점', icon: <ShoppingBag size={16}/> },
           { id: 'quiz', label: '일일퀴즈', icon: <HelpCircle size={16}/> },
+          { id: 'history', label: '기록', icon: <History size={16}/> },
         ].map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex-1 min-w-[80px] py-3 rounded-xl font-bold text-sm transition-all ${activeTab === tab.id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500'}`}>
             <span className="flex items-center justify-center gap-2">{tab.icon} {tab.label}</span>
           </button>
         ))}
       </nav>
-
-      {activeTab === 'market' && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {marketItems.map(item => (
-            <div key={item.id} className="bg-white p-6 rounded-3xl border shadow-sm hover:shadow-md transition-all">
-              <div className="flex justify-between items-start mb-4">
-                <Package className="text-indigo-600" size={32}/>
-                <span className={`px-2 py-1 rounded-lg text-[10px] font-bold ${item.stock > 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>
-                  {item.stock > 0 ? `재고 ${item.stock}개` : '품절'}
-                </span>
-              </div>
-              <h4 className="text-lg font-black text-slate-800 mb-1">{item.name}</h4>
-              <p className="text-xl font-black text-indigo-600 mb-4">₩{item.price.toLocaleString()}</p>
-              <button 
-                onClick={() => handleBuyItem(item)}
-                disabled={isLoading || item.stock <= 0}
-                className="w-full py-3 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 disabled:opacity-50 transition-all"
-              >
-                구매하기
-              </button>
-            </div>
-          ))}
-          {marketItems.length === 0 && <div className="col-span-full py-20 text-center text-slate-400 font-bold">판매 중인 물품이 없습니다.</div>}
-        </div>
-      )}
-
-      {activeTab === 'invest' && (
-        <div className="space-y-6">
-          <div className="bg-white p-8 rounded-3xl border shadow-sm">
-            <div className="flex flex-col md:flex-row gap-8">
-              <div className="flex-1 space-y-4">
-                <h3 className="text-lg font-bold">증권 계좌 이용</h3>
-                <button onClick={() => setInvestPath({from: 'balance', to: 'brokerage_balance'})} className={`w-full p-4 border rounded-xl text-left ${investPath?.from === 'balance' ? 'border-amber-500 bg-amber-50' : ''}`}>현금 → 증권 입금</button>
-                <button onClick={() => setInvestPath({from: 'brokerage_balance', to: 'balance'})} className={`w-full p-4 border rounded-xl text-left ${investPath?.from === 'brokerage_balance' ? 'border-amber-500 bg-amber-50' : ''}`}>증권 → 현금 출금</button>
-              </div>
-              <div className="flex-1">
-                <input type="number" value={transferAmount} onChange={e=>setTransferAmount(Number(e.target.value))} className="w-full p-4 border rounded-xl mb-4 text-center text-xl font-bold" placeholder="금액" />
-                <button onClick={()=>investPath && handleAssetTransfer(investPath.from, investPath.to)} className="w-full py-4 bg-amber-500 text-white rounded-xl font-bold">이체 실행</button>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-3xl border shadow-sm">
-            <h3 className="text-xl font-black mb-6">실시간 시장 정보</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-              {marketData.stocks.map((s, i) => {
-                const isUp = s.change && !s.change.includes('-');
-                return (
-                  <div key={i} className="bg-white p-5 rounded-3xl border shadow-sm flex flex-col justify-between h-44">
-                    <div><p className="text-xs font-black mb-1">{s.ticker || 'STOCK'}</p><p className="text-xs font-bold text-slate-400">{s.name}</p></div>
-                    <div className="mt-auto"><h4 className="text-2xl font-black">₩{s.price}</h4></div>
-                    <div className={`text-sm font-black text-right ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>{s.change}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
 
       {activeTab === 'transfer' && (
         <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-6">
@@ -300,29 +242,146 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
               {friends.map(f=>(<button key={f.id} onClick={()=>setSelectedRecipientIds(p=>p.includes(f.id)?p.filter(id=>id!==f.id):[...p,f.id])} className={`p-2 rounded-lg text-xs font-bold truncate ${selectedRecipientIds.includes(f.id)?'bg-indigo-600 text-white':'bg-white'}`}>{f.name}</button>))}
             </div>
             <div className="space-y-4">
-              <input type="number" value={transferAmount} onChange={e=>setTransferAmount(Number(e.target.value))} className="w-full p-4 border rounded-xl text-center text-2xl font-black" placeholder="원" />
+              <input type="number" value={transferAmount || ''} onChange={e=>setTransferAmount(Number(e.target.value))} className="w-full p-4 border rounded-xl text-center text-2xl font-black" placeholder="원" />
               <button onClick={handleSendMoney} className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-lg">송금하기</button>
             </div>
           </div>
         </div>
       )}
 
+      {activeTab === 'bank' && (
+        <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
+          <div className="flex flex-col md:flex-row gap-8">
+            <div className="flex-1 space-y-4">
+              <h3 className="text-lg font-bold flex items-center gap-2"><Landmark className="text-emerald-500"/> 은행 서비스</h3>
+              <button onClick={() => setBankPath({from: 'balance', to: 'bank_balance'})} className={`w-full p-4 border rounded-xl text-left font-bold transition-all ${bankPath?.from === 'balance' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'bg-slate-50'}`}>현금 → 은행 입금</button>
+              <button onClick={() => setBankPath({from: 'bank_balance', to: 'balance'})} className={`w-full p-4 border rounded-xl text-left font-bold transition-all ${bankPath?.from === 'bank_balance' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'bg-slate-50'}`}>은행 → 현금 출금</button>
+            </div>
+            <div className="flex-1 space-y-4">
+              <label className="text-xs font-bold text-slate-400">이체 금액</label>
+              <input type="number" value={transferAmount || ''} onChange={e=>setTransferAmount(Number(e.target.value))} className="w-full p-4 border rounded-xl text-center text-xl font-bold" placeholder="0" />
+              <button onClick={()=>bankPath && handleAssetTransfer(bankPath.from, bankPath.to)} disabled={!bankPath || transferAmount <= 0} className="w-full py-4 bg-emerald-600 text-white rounded-xl font-bold disabled:opacity-50">이체 실행</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'invest' && (
+        <div className="space-y-6">
+          <div className="bg-white p-8 rounded-3xl border shadow-sm">
+            <div className="flex flex-col md:flex-row gap-8">
+              <div className="flex-1 space-y-4">
+                <h3 className="text-lg font-bold flex items-center gap-2"><LineChart className="text-amber-500"/> 증권 계좌 이용</h3>
+                <button onClick={() => setInvestPath({from: 'balance', to: 'brokerage_balance'})} className={`w-full p-4 border rounded-xl text-left font-bold transition-all ${investPath?.from === 'balance' ? 'border-amber-500 bg-amber-50 text-amber-700' : 'bg-slate-50'}`}>현금 → 증권 입금</button>
+                <button onClick={() => setInvestPath({from: 'brokerage_balance', to: 'balance'})} className={`w-full p-4 border rounded-xl text-left font-bold transition-all ${investPath?.from === 'brokerage_balance' ? 'border-amber-500 bg-amber-50 text-amber-700' : 'bg-slate-50'}`}>증권 → 현금 출금</button>
+              </div>
+              <div className="flex-1 space-y-4">
+                <label className="text-xs font-bold text-slate-400">이체 금액</label>
+                <input type="number" value={transferAmount || ''} onChange={e=>setTransferAmount(Number(e.target.value))} className="w-full p-4 border rounded-xl text-center text-xl font-bold" placeholder="0" />
+                <button onClick={()=>investPath && handleAssetTransfer(investPath.from, investPath.to)} disabled={!investPath || transferAmount <= 0} className="w-full py-4 bg-amber-500 text-white rounded-xl font-bold disabled:opacity-50">이체 실행</button>
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-6 rounded-3xl border shadow-sm">
+            <h3 className="text-xl font-black mb-6 flex items-center gap-2"><TrendingUp className="text-indigo-600"/> 실시간 시장 정보</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {marketData.stocks.map((s, i) => {
+                const isUp = s.change && !s.change.includes('-');
+                return (
+                  <div key={i} className="bg-white p-5 rounded-3xl border shadow-sm flex flex-col justify-between h-40 hover:border-indigo-200 transition-all">
+                    <div><p className="text-[10px] font-black text-indigo-500 mb-1">{s.ticker || 'STOCK'}</p><p className="text-xs font-bold text-slate-400">{s.name}</p></div>
+                    <div className="flex justify-between items-end">
+                      <h4 className="text-xl font-black">₩{s.price}</h4>
+                      <div className={`text-sm font-black ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>{s.change}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'market' && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {marketItems.map(item => (
+            <div key={item.id} className="bg-white p-6 rounded-3xl border shadow-sm hover:shadow-md transition-all">
+              <div className="flex justify-between items-start mb-4">
+                <Package className="text-indigo-600" size={32}/>
+                {item.stock !== undefined && (
+                  <span className={`px-2 py-1 rounded-lg text-[10px] font-bold ${item.stock > 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>
+                    {item.stock > 0 ? `재고 ${item.stock}개` : '품절'}
+                  </span>
+                )}
+              </div>
+              <h4 className="text-lg font-black text-slate-800 mb-1">{item.name}</h4>
+              <p className="text-xl font-black text-indigo-600 mb-4">₩{item.price.toLocaleString()}</p>
+              <button 
+                onClick={() => handleBuyItem(item)}
+                disabled={isLoading || (item.stock !== undefined && item.stock <= 0)}
+                className="w-full py-3 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 disabled:opacity-50 transition-all"
+              >
+                구매하기
+              </button>
+            </div>
+          ))}
+          {marketItems.length === 0 && <div className="col-span-full py-20 text-center text-slate-400 font-bold">판매 중인 물품이 없습니다.</div>}
+        </div>
+      )}
+
       {activeTab === 'quiz' && (
-        <div className="grid grid-cols-1 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {dailyQuizzes.map((quiz, i) => {
             const solved = solvedQuizIds.includes(quiz.id);
             return (
-              <div key={quiz.id} className={`bg-white p-6 rounded-2xl border shadow-sm ${solved ? 'opacity-50' : ''}`}>
-                <h3 className="text-lg font-bold mb-4">{quiz.question}</h3>
-                <div className="grid grid-cols-1 gap-2">
+              <div key={quiz.id} className={`bg-white p-8 rounded-3xl border shadow-sm transition-all ${solved ? 'bg-slate-50 border-slate-200' : 'border-indigo-100 ring-2 ring-indigo-50'}`}>
+                <div className="flex items-center gap-3 mb-6">
+                  <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-black ${solved ? 'bg-slate-200 text-slate-500' : 'bg-indigo-600 text-white'}`}>{i + 1}</div>
+                  <h3 className="text-lg font-black text-slate-800 leading-tight">{quiz.question}</h3>
+                </div>
+                <div className="grid grid-cols-1 gap-3">
                   {quiz.options.map((opt, oIdx) => (
-                    <button key={oIdx} onClick={() => !solved && handleQuizSolve(quiz, oIdx + 1)} disabled={solved} className="w-full p-3 border rounded-xl text-left hover:bg-indigo-50 transition-all">{oIdx + 1}. {opt}</button>
+                    <button 
+                      key={oIdx} 
+                      onClick={() => !solved && handleQuizSolve(quiz, oIdx + 1)} 
+                      disabled={solved} 
+                      className={`w-full p-4 border rounded-2xl text-left font-bold text-sm transition-all ${solved ? 'bg-white border-slate-100 text-slate-300' : 'hover:border-indigo-600 hover:bg-indigo-50 border-slate-100 text-slate-600'}`}
+                    >
+                      <span className="mr-3 opacity-40">{oIdx + 1}.</span> {opt}
+                    </button>
                   ))}
                 </div>
-                {solved && <div className="mt-4 text-center text-emerald-600 font-bold">참여 완료</div>}
+                {solved && <div className="mt-6 flex items-center justify-center gap-2 text-emerald-600 font-black bg-emerald-50 py-3 rounded-2xl"><CheckCircle2 size={18}/> 참여 완료</div>}
+                {!solved && <div className="mt-6 text-center text-[10px] font-bold text-slate-400 italic">정답 보상: ₩{quiz.reward.toLocaleString()}</div>}
               </div>
             );
           })}
+          {dailyQuizzes.length === 0 && <div className="col-span-full py-20 text-center text-slate-400 font-bold">오늘 출제된 퀴즈가 없습니다.</div>}
+        </div>
+      )}
+
+      {activeTab === 'history' && (
+        <div className="bg-white p-6 rounded-3xl border shadow-sm overflow-x-auto">
+          <table className="w-full text-left text-sm whitespace-nowrap">
+            <thead>
+              <tr className="bg-slate-50 border-y text-slate-500 font-bold">
+                <th className="px-4 py-3">날짜</th><th className="px-4 py-3">구분</th><th className="px-4 py-3">내용</th><th className="px-4 py-3">상대</th><th className="px-4 py-3 text-right">금액</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {logs.map(log => (
+                <tr key={log.id} className="hover:bg-slate-50">
+                  <td className="px-4 py-4 text-slate-400 text-xs">{new Date(log.created_at).toLocaleDateString()}</td>
+                  <td className="px-4 py-4 font-bold">{log.type}</td>
+                  <td className="px-4 py-4 text-slate-600">{log.description}</td>
+                  <td className="px-4 py-4 font-bold">{log.sender_id === studentId ? log.receiver_name : log.sender_name}</td>
+                  <td className={`px-4 py-4 text-right font-black ${log.sender_id === studentId ? 'text-red-500' : 'text-emerald-600'}`}>
+                    {log.sender_id === studentId ? '-' : '+'}{log.amount.toLocaleString()}원
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>

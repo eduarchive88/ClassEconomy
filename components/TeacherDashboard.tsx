@@ -88,21 +88,22 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
 
   const handleMarketItemAdd = async () => {
     if (!newItem.name || newItem.price <= 0) return alert('물품명과 가격을 확인하세요.');
-    // Schema cache issue workaround: Try inserting without 'stock' if the column is missing in DB
-    const insertData: any = { 
+    
+    // 수량(stock) 컬럼 오류 해결을 위해 stock 포함하여 전송
+    const { error } = await supabase.from('market_items').insert({ 
       name: newItem.name, 
       price: newItem.price, 
+      stock: newItem.stock,
       teacher_id: teacherId 
-    };
+    });
     
-    const { error } = await supabase.from('market_items').insert(insertData);
     if (!error) { 
       alert('물품이 등록되었습니다.');
       setShowMarketAddModal(false); 
       setNewItem({ name: '', price: 0, stock: 10 });
       fetchData(); 
     } else {
-      alert('등록 중 오류 발생: ' + error.message + '\n\n*주의: 데이터베이스에 stock 컬럼이 없는 경우 SQL Editor에서 추가해야 합니다.*');
+      alert('등록 중 오류 발생: ' + error.message + '\n\n*오류 해결 방법: Supabase SQL Editor에서 "ALTER TABLE market_items ADD COLUMN stock INTEGER DEFAULT 0;" 명령어를 실행하세요.*');
     }
   };
 
@@ -301,7 +302,7 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
                 <div key={item.id} className="p-4 border rounded-2xl flex justify-between items-center bg-slate-50">
                   <div>
                     <p className="font-bold text-slate-800">{item.name}</p>
-                    <p className="text-xs text-slate-500">가격: {item.price.toLocaleString()}원</p>
+                    <p className="text-xs text-slate-500">가격: {item.price.toLocaleString()}원 | 재고: {item.stock || 0}개</p>
                   </div>
                   <button onClick={async () => { if(confirm('삭제?')) { await supabase.from('market_items').delete().eq('id', item.id); fetchData(); } }} className="text-red-400 hover:text-red-600"><Trash2 size={18}/></button>
                 </div>
@@ -433,6 +434,10 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-500 ml-1">판매 가격 (단위: 원)</label>
                 <input type="number" placeholder="예: 5000" value={newItem.price || ''} onChange={e=>setNewItem({...newItem, price: Number(e.target.value)})} className="w-full p-3 border rounded-xl" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500 ml-1">재고 수량 (개)</label>
+                <input type="number" placeholder="예: 10" value={newItem.stock || ''} onChange={e=>setNewItem({...newItem, stock: Number(e.target.value)})} className="w-full p-3 border rounded-xl" />
               </div>
               <div className="flex gap-2 pt-2">
                 <button onClick={()=>setShowMarketAddModal(false)} className="flex-1 bg-slate-100 py-3 rounded-xl font-bold">취소</button>
