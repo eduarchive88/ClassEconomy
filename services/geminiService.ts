@@ -1,8 +1,21 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
+// 헬퍼: 현재 활성 세션의 API 키를 가져옵니다.
+const getApiKey = () => {
+  const lastClassId = localStorage.getItem('last_class_id');
+  if (lastClassId) {
+    const savedKey = localStorage.getItem(`google_api_key_${lastClassId}`);
+    if (savedKey) return savedKey;
+  }
+  return process.env.API_KEY || '';
+};
+
 export const generateAIQuiz = async (topic: string, count: number, schoolLevel: string) => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  if (!apiKey) return [];
+  
+  const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
     contents: `Topic: ${topic}. Level: ${schoolLevel}. Generate ${count} multiple choice quizzes.`,
@@ -29,7 +42,10 @@ export const generateAIQuiz = async (topic: string, count: number, schoolLevel: 
 };
 
 export const summarizeNews = async (content: string, schoolLevel: string) => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  if (!apiKey) return "API Key가 설정되지 않았습니다.";
+
+  const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: `다음 경제 뉴스 기사를 ${schoolLevel} 수준에 맞춰서 쉽고 명확하게 요약해줘: ${content}. 학생이 경제 개념을 이해하기 좋게 설명해줘.`,
@@ -38,7 +54,10 @@ export const summarizeNews = async (content: string, schoolLevel: string) => {
 };
 
 export const getMarketData = async () => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  if (!apiKey) return { stocks: [], coins: [] };
+
+  const ai = new GoogleGenAI({ apiKey });
   const stocks = "삼성전자, 삼성SDI, SK하이닉스, 포스코홀딩스, 대한항공, LG전자, 현대자동차, 기아, NAVER, 카카오, LG화학, 셀트리온, Apple, Amazon, Netflix, Tesla, NVIDIA, Microsoft, Meta";
   const coins = "비트코인(BTC), 이더리움(ETH), 리플(XRP)";
   
@@ -106,7 +125,10 @@ export const getMarketData = async () => {
 };
 
 export const getEconomyNews = async () => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  if (!apiKey) return [];
+
+  const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
     contents: "지금 구글 뉴스(news.google.com)의 경제/금융 섹션에서 가장 중요한 뉴스 5개를 실시간으로 검색해서 제목과 원문 URL을 알려줘. JSON 배열 형식: [{ 'title': string, 'url': string }]",
