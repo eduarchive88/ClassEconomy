@@ -88,19 +88,21 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
 
   const handleMarketItemAdd = async () => {
     if (!newItem.name || newItem.price <= 0) return alert('물품명과 가격을 확인하세요.');
-    const { error } = await supabase.from('market_items').insert({ 
+    // Schema cache issue workaround: Try inserting without 'stock' if the column is missing in DB
+    const insertData: any = { 
       name: newItem.name, 
       price: newItem.price, 
-      stock: newItem.stock, 
       teacher_id: teacherId 
-    });
+    };
+    
+    const { error } = await supabase.from('market_items').insert(insertData);
     if (!error) { 
       alert('물품이 등록되었습니다.');
       setShowMarketAddModal(false); 
       setNewItem({ name: '', price: 0, stock: 10 });
       fetchData(); 
     } else {
-      alert('등록 중 오류 발생: ' + error.message);
+      alert('등록 중 오류 발생: ' + error.message + '\n\n*주의: 데이터베이스에 stock 컬럼이 없는 경우 SQL Editor에서 추가해야 합니다.*');
     }
   };
 
@@ -121,6 +123,35 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
       teacher_id: teacherId, session_code: activeSession.session_code
     });
     if (!error) { setShowAddModal(false); setNewStudent({id:'', name:'', salary:0}); fetchData(); }
+  };
+
+  const downloadQuizTemplate = () => {
+    const headers = [['문제', '보기1', '보기2', '보기3', '보기4', '정답(1-4)', '수당']];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(headers);
+    XLSX.utils.book_append_sheet(wb, ws, "퀴즈양식");
+    XLSX.writeFile(wb, "학급경제_퀴즈_양식.xlsx");
+  };
+
+  const handleQuizBulkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      const data = new Uint8Array(evt.target?.result as ArrayBuffer);
+      const workbook = XLSX.read(data, { type: 'array' });
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 }) as any[];
+      const quizData = rows.slice(1).filter(row => row[0]).map(row => ({
+        question: String(row[0]), options: [String(row[1]), String(row[2]), String(row[3]), String(row[4])],
+        answer: Number(row[5]), reward: Number(row[6] || 1000), teacher_id: teacherId, session_code: activeSession.session_code
+      }));
+      if (quizData.length > 0) {
+        const { error } = await supabase.from('quizzes').insert(quizData);
+        if (error) alert(`오류: ${error.message}`);
+        else { alert(`${quizData.length}개의 퀴즈가 등록되었습니다.`); fetchData(); }
+      }
+    };
+    reader.readAsArrayBuffer(file);
   };
 
   return (
@@ -176,16 +207,23 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm whitespace-nowrap">
-                <thead><tr className="bg-slate-50 border-y text-slate-500">
-                  <th className="px-4 py-3">학번</th><th className="px-4 py-3">이름</th><th className="px-4 py-3">총 자산</th>
-                  <th className="px-4 py-3">현금</th><th className="px-4 py-3">은행</th><th className="px-4 py-3">주급</th><th className="px-4 py-3">삭제</th>
+                <thead><tr className="bg-slate-50 border-y text-slate-500 font-bold">
+                  <th className="px-4 py-3">학번</th><th className="px-4 py-3">이름</th><th className="px-4 py-3 text-indigo-600">총 자산</th>
+                  <th className="px-4 py-3">현금</th><th className="px-4 py-3">은행</th><th className="px-4 py-3">증권</th><th className="px-4 py-3 text-emerald-600">주급</th><th className="px-4 py-3">삭제</th>
                 </tr></thead>
                 <tbody className="divide-y">{students.map(s => (
                   <tr key={s.id} className="hover:bg-slate-50/50">
-                    <td className="px-4 py-4 font-bold text-indigo-600">{s.id}</td><td className="px-4 py-4">{s.name}</td>
+                    <td className="px-4 py-4 font-bold text-indigo-600">{s.id}</td>
+                    <td className="px-4 py-4">{s.name}</td>
                     <td className="px-4 py-4 font-black">{(s.balance + s.bank_balance + s.brokerage_balance).toLocaleString()}</td>
-                    <td className="px-4 py-4">{s.balance.toLocaleString()}</td><td className="px-4 py-4">{s.bank_balance.toLocaleString()}</td>
-                    <td className="px-4 py-4">{s.salary.toLocaleString()}</td>
+                    {['balance', 'bank_balance', 'brokerage_balance', 'salary'].map(field => (
+                      <td key={field} className="px-4 py-4">
+                        <div className="flex items-center gap-1 cursor-pointer hover:text-indigo-600" onClick={async () => {
+                          const val = prompt(`${field} 수정: 새로운 값을 입력하세요`, String(s[field as keyof Student]));
+                          if (val !== null) { await supabase.from('students').update({ [field]: Number(val) }).eq('id', s.id); fetchData(); }
+                        }}>{(s[field as keyof Student] as number)?.toLocaleString()} <Settings size={10} className="opacity-20"/></div>
+                      </td>
+                    ))}
                     <td className="px-4 py-4"><button onClick={async () => { if(confirm('삭제?')) { await supabase.from('students').delete().eq('id', s.id); fetchData(); } }}><Trash2 size={16} className="text-slate-300 hover:text-red-500"/></button></td>
                   </tr>
                 ))}</tbody>
@@ -263,7 +301,7 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
                 <div key={item.id} className="p-4 border rounded-2xl flex justify-between items-center bg-slate-50">
                   <div>
                     <p className="font-bold text-slate-800">{item.name}</p>
-                    <p className="text-xs text-slate-500">가격: {item.price.toLocaleString()}원 | 재고: {item.stock}개</p>
+                    <p className="text-xs text-slate-500">가격: {item.price.toLocaleString()}원</p>
                   </div>
                   <button onClick={async () => { if(confirm('삭제?')) { await supabase.from('market_items').delete().eq('id', item.id); fetchData(); } }} className="text-red-400 hover:text-red-600"><Trash2 size={18}/></button>
                 </div>
@@ -277,7 +315,14 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
           <div className="bg-white p-6 rounded-2xl border shadow-sm">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold flex items-center gap-2"><HelpCircle size={20}/> 퀴즈 관리</h2>
-              <button onClick={() => setShowQuizAddModal(true)} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2"><Plus size={16}/> 개별 추가</button>
+              <div className="flex gap-2">
+                <button onClick={downloadQuizTemplate} className="flex items-center gap-1 px-3 py-2 text-xs font-bold bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200"><Download size={14}/> 양식 다운</button>
+                <button onClick={() => setShowQuizAddModal(true)} className="flex items-center gap-1 px-3 py-2 text-xs font-bold bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200"><Plus size={14}/> 개별 추가</button>
+                <label className="flex items-center gap-1 px-3 py-2 text-xs font-bold bg-indigo-600 text-white rounded-lg cursor-pointer hover:bg-indigo-700">
+                  <FileSpreadsheet size={14}/> 일괄 등록
+                  <input type="file" className="hidden" onChange={handleQuizBulkUpload} accept=".xlsx,.xls,.csv" />
+                </label>
+              </div>
             </div>
             <div className="space-y-4">
               {quizzes.map(q => (
@@ -316,8 +361,17 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
               </div>
               <div className="p-5 bg-slate-50 rounded-2xl border border-slate-200 space-y-4">
                 <h3 className="font-bold text-slate-800 flex items-center gap-2"><GraduationCap size={16}/> 학급 정보 수정</h3>
-                <input type="text" value={settings.session_code} onChange={(e) => setSettings({...settings, session_code: e.target.value.toUpperCase()})} className="w-full p-3 border rounded-xl text-sm font-mono" />
-                <button onClick={() => updateSessionSetting({ session_code: settings.session_code })} className="w-full bg-slate-800 text-white py-3 rounded-xl text-sm font-bold">코드 변경</button>
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400">학급 이름</label>
+                    <input type="text" value={settings.class_name} onChange={(e) => setSettings({...settings, class_name: e.target.value})} className="w-full p-3 border rounded-xl text-sm" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400">세션 코드</label>
+                    <input type="text" value={settings.session_code} onChange={(e) => setSettings({...settings, session_code: e.target.value.toUpperCase()})} className="w-full p-3 border rounded-xl text-sm font-mono" />
+                  </div>
+                  <button onClick={() => updateSessionSetting({ class_name: settings.class_name, session_code: settings.session_code })} className="w-full bg-slate-800 text-white py-3 rounded-xl text-sm font-bold">정보 업데이트</button>
+                </div>
               </div>
               <button onClick={deleteSession} className="w-full bg-red-600 text-white py-4 rounded-xl text-sm font-bold flex items-center justify-center gap-2"><Trash size={18}/> 학급 삭제</button>
             </div>
@@ -374,15 +428,11 @@ const TeacherDashboard: React.FC<Props> = ({ teacherId, activeSession }) => {
             <div className="space-y-4">
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-500 ml-1">물품명</label>
-                <input type="text" placeholder="예: 매점 이용권, 숙제 면제권" value={newItem.name} onChange={e=>setNewItem({...newItem, name: e.target.value})} className="w-full p-3 border rounded-xl" />
+                <input type="text" placeholder="예: 칙촉, 아이스크림, 숙제 면제권" value={newItem.name} onChange={e=>setNewItem({...newItem, name: e.target.value})} className="w-full p-3 border rounded-xl" />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-500 ml-1">판매 가격 (단위: 원)</label>
                 <input type="number" placeholder="예: 5000" value={newItem.price || ''} onChange={e=>setNewItem({...newItem, price: Number(e.target.value)})} className="w-full p-3 border rounded-xl" />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-500 ml-1">초기 재고 수량 (개)</label>
-                <input type="number" placeholder="예: 10" value={newItem.stock || ''} onChange={e=>setNewItem({...newItem, stock: Number(e.target.value)})} className="w-full p-3 border rounded-xl" />
               </div>
               <div className="flex gap-2 pt-2">
                 <button onClick={()=>setShowMarketAddModal(false)} className="flex-1 bg-slate-100 py-3 rounded-xl font-bold">취소</button>
