@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
-import { KeyRound, Hash, LogIn, Mail, UserPlus, Fingerprint } from 'lucide-react';
+// Added GraduationCap to imports
+import { KeyRound, Hash, LogIn, Mail, UserPlus, Fingerprint, ShieldCheck, GraduationCap } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
 
 interface Props {
@@ -27,9 +28,17 @@ const LoginScreen: React.FC<Props> = ({ onLogin }) => {
     setIsLoading(true);
     try {
       if (isSignUp) {
-        const { error } = await supabase.auth.signUp({ email, password });
+        const { error } = await supabase.auth.signUp({ 
+          email, 
+          password,
+          options: {
+            data: {
+              full_name: email.split('@')[0],
+            }
+          }
+        });
         if (error) throw error;
-        alert('가입 확인 이메일을 확인해주세요!');
+        alert('가입 확인 이메일이 발송되었습니다. 이메일을 확인하고 로그인을 진행해 주세요!');
         setIsSignUp(false);
       } else {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -40,7 +49,7 @@ const LoginScreen: React.FC<Props> = ({ onLogin }) => {
         }
       }
     } catch (error: any) {
-      alert(`오류: ${error.message}`);
+      alert(`인증 오류: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -80,52 +89,73 @@ const LoginScreen: React.FC<Props> = ({ onLogin }) => {
   };
 
   return (
-    <div className="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-md border border-slate-100">
-      <div className="flex bg-slate-100 p-1.5 rounded-2xl mb-8">
-        <button onClick={() => setTab('teacher')} className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${tab === 'teacher' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>교사용</button>
-        <button onClick={() => setTab('student')} className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${tab === 'student' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>학생용</button>
+    <div className="bg-white p-10 rounded-[2.5rem] shadow-2xl w-full max-w-md border border-slate-100">
+      <div className="flex bg-slate-100 p-1.5 rounded-2xl mb-10">
+        <button onClick={() => setTab('teacher')} className={`flex-1 py-3.5 rounded-xl text-sm font-black transition-all ${tab === 'teacher' ? 'bg-white text-indigo-600 shadow-md' : 'text-slate-500 hover:text-slate-700'}`}>교사용</button>
+        <button onClick={() => setTab('student')} className={`flex-1 py-3.5 rounded-xl text-sm font-black transition-all ${tab === 'student' ? 'bg-white text-indigo-600 shadow-md' : 'text-slate-500 hover:text-slate-700'}`}>학생용</button>
       </div>
 
       {tab === 'teacher' ? (
-        <div className="space-y-6">
+        <div className="space-y-8">
           <div className="text-center">
-            <h2 className="text-2xl font-bold text-slate-800">{isSignUp ? '선생님 회원가입' : '선생님 로그인'}</h2>
-            <p className="text-sm text-slate-500 mt-1">이메일로 학급 경제를 관리하세요.</p>
+            <div className="inline-flex p-4 bg-indigo-50 rounded-3xl text-indigo-600 mb-4">
+              <ShieldCheck size={32} />
+            </div>
+            <h2 className="text-3xl font-black text-slate-800 tracking-tight">{isSignUp ? '선생님 가입' : '선생님 로그인'}</h2>
+            <p className="text-sm text-slate-400 mt-2 font-medium">이메일 계정으로 학급 경제를 관리하세요.</p>
           </div>
           
           <form onSubmit={handleTeacherAuth} className="space-y-4">
-            <div className="relative">
-              <Mail className="absolute left-4 top-3.5 text-slate-400" size={18}/>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="이메일 주소" className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm" required />
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-400 ml-1 uppercase">Email Address</label>
+              <div className="relative">
+                <Mail className="absolute left-4 top-4 text-slate-400" size={18}/>
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email@school.com" className="w-full pl-12 pr-4 py-4 bg-slate-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-bold" required />
+              </div>
             </div>
-            <div className="relative">
-              <KeyRound className="absolute left-4 top-3.5 text-slate-400" size={18}/>
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="비밀번호" className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm" required />
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-400 ml-1 uppercase">Password</label>
+              <div className="relative">
+                <KeyRound className="absolute left-4 top-4 text-slate-400" size={18}/>
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="w-full pl-12 pr-4 py-4 bg-slate-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-bold" required />
+              </div>
             </div>
             
-            <button type="submit" disabled={isLoading} className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold hover:bg-slate-800 shadow-lg flex justify-center items-center gap-2 transition-all">
-              {isLoading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : (isSignUp ? <UserPlus size={18}/> : <LogIn size={18} />)}
-              {isSignUp ? '선생님으로 시작하기' : '로그인'}
+            <button type="submit" disabled={isLoading} className="w-full bg-slate-900 text-white py-5 rounded-3xl font-black hover:bg-slate-800 shadow-xl shadow-slate-200 flex justify-center items-center gap-2 mt-4 transition-all hover:scale-[1.02] active:scale-[0.98]">
+              {isLoading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : (isSignUp ? <UserPlus size={20}/> : <LogIn size={20} />)}
+              {isSignUp ? '가입하고 시작하기' : '선생님 로그인'}
             </button>
             
-            <button type="button" onClick={() => setIsSignUp(!isSignUp)} className="w-full text-xs font-bold text-indigo-600 hover:underline">
+            <button type="button" onClick={() => setIsSignUp(!isSignUp)} className="w-full py-2 text-xs font-black text-indigo-600 hover:text-indigo-700 transition-colors">
               {isSignUp ? '이미 계정이 있으신가요? 로그인' : '처음이신가요? 이메일로 가입하기'}
             </button>
           </form>
         </div>
       ) : (
-        <form onSubmit={handleStudentLogin} className="space-y-4">
-          <div className="text-center mb-4">
-            <h2 className="text-2xl font-bold text-slate-800">학생 로그인</h2>
-            <p className="text-sm text-slate-500 mt-1">교사가 제공한 세션 코드가 필요합니다.</p>
+        <form onSubmit={handleStudentLogin} className="space-y-8">
+          <div className="text-center">
+            <div className="inline-flex p-4 bg-emerald-50 rounded-3xl text-emerald-600 mb-4">
+              <GraduationCap size={32} />
+            </div>
+            <h2 className="text-3xl font-black text-slate-800 tracking-tight">학생 로그인</h2>
+            <p className="text-sm text-slate-400 mt-2 font-medium">우리 반 세션 코드와 학번이 필요합니다.</p>
           </div>
           <div className="space-y-4">
-            <div className="relative"><Hash className="absolute left-4 top-3.5 text-slate-400" size={18}/><input type="text" value={studentId} onChange={(e) => setStudentId(e.target.value)} placeholder="학번 (예: 20101)" className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm" required /></div>
-            <div className="relative"><Fingerprint className="absolute left-4 top-3.5 text-slate-400" size={18}/><input type="text" value={sessionCode} onChange={(e) => setSessionCode(e.target.value)} placeholder="세션 코드" className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm" required /></div>
-            <div className="relative"><KeyRound className="absolute left-4 top-3.5 text-slate-400" size={18}/><input type="password" value={studentPw} onChange={(e) => setStudentPw(e.target.value)} placeholder="비밀번호 (설정한 경우에만)" className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm" /></div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-400 ml-1 uppercase">Student ID</label>
+              <div className="relative"><Hash className="absolute left-4 top-4 text-slate-400" size={18}/><input type="text" value={studentId} onChange={(e) => setStudentId(e.target.value)} placeholder="학번 (예: 20101)" className="w-full pl-12 pr-4 py-4 bg-slate-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-bold" required /></div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-400 ml-1 uppercase">Session Code</label>
+              <div className="relative"><Fingerprint className="absolute left-4 top-4 text-slate-400" size={18}/><input type="text" value={sessionCode} onChange={(e) => setSessionCode(e.target.value.toUpperCase())} placeholder="세션 코드" className="w-full pl-12 pr-4 py-4 bg-slate-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-black font-mono tracking-widest" required /></div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-400 ml-1 uppercase">Optional Password</label>
+              <div className="relative"><KeyRound className="absolute left-4 top-4 text-slate-400" size={18}/><input type="password" value={studentPw} onChange={(e) => setStudentPw(e.target.value)} placeholder="비밀번호" className="w-full pl-12 pr-4 py-4 bg-slate-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-bold" /></div>
+            </div>
           </div>
-          <button type="submit" disabled={isLoading} className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold hover:bg-emerald-700 shadow-lg flex justify-center gap-2 mt-4 transition-all">
-            {isLoading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <LogIn size={18} />} 활동 시작하기
+          <button type="submit" disabled={isLoading} className="w-full bg-emerald-600 text-white py-5 rounded-3xl font-black hover:bg-emerald-700 shadow-xl shadow-emerald-100 flex justify-center gap-2 mt-4 transition-all hover:scale-[1.02] active:scale-[0.98]">
+            {isLoading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <LogIn size={20} />} 학급 활동 참여하기
           </button>
         </form>
       )}
