@@ -28,7 +28,6 @@ const App: React.FC = () => {
         if (sessionError) throw sessionError;
 
         if (session?.user) {
-          // profiles 테이블에서 실제 이름 확인
           const { data: profile } = await supabase
             .from('profiles')
             .select('full_name')
@@ -49,7 +48,7 @@ const App: React.FC = () => {
         }
       } catch (err: any) {
         console.error("Initialization Error:", err);
-        setError(err.message === 'Failed to fetch' ? '데이터베이스 서버에 연결할 수 없습니다. URL 설정을 확인해 주세요.' : err.message);
+        setError(err.message);
       } finally {
         setIsInitializing(false);
       }
@@ -82,8 +81,6 @@ const App: React.FC = () => {
       }
     } catch (err: any) {
       console.error("Fetch Classes Error:", err);
-      setError("학급 정보를 불러오는 중 오류가 발생했습니다.");
-      setShowPicker(true);
     }
   };
 
@@ -105,7 +102,6 @@ const App: React.FC = () => {
     }
   };
 
-  // 1. Supabase 설정 누락 시 에러 화면
   if (!isSupabaseConfigured) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-900 p-8 text-center">
@@ -113,17 +109,14 @@ const App: React.FC = () => {
           <AlertTriangle size={64} />
         </div>
         <h1 className="text-3xl font-black text-white mb-4 tracking-tighter">데이터베이스 설정이 필요합니다</h1>
-        <p className="text-slate-400 max-w-md leading-relaxed mb-10 font-medium">
-          애플리케이션을 실행하려면 Supabase 환경 변수(<code className="text-rose-400">VITE_SUPABASE_URL</code>, <code className="text-rose-400">VITE_SUPABASE_ANON_KEY</code>) 설정이 필요합니다.
-        </p>
+        <p className="text-slate-400 max-w-md leading-relaxed mb-10 font-medium">Supabase URL과 Anon Key가 올바른지 확인해 주세요.</p>
         <button onClick={() => window.location.reload()} className="flex items-center gap-2 bg-white text-slate-900 px-8 py-4 rounded-2xl font-black hover:bg-slate-100 transition-all">
-          <RefreshCcw size={20} /> 설정 후 다시 시도
+          <RefreshCcw size={20} /> 새로고침
         </button>
       </div>
     );
   }
 
-  // 2. 초기화 중 화면
   if (isInitializing) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-indigo-700">
@@ -133,19 +126,6 @@ const App: React.FC = () => {
     );
   }
 
-  // 3. 에러 발생 시 화면
-  if (error && !user) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-6 text-center">
-        <AlertTriangle size={48} className="text-rose-500 mb-4" />
-        <h2 className="text-2xl font-black text-slate-900 mb-2">연결 오류 발생</h2>
-        <p className="text-slate-500 mb-8 font-medium">{error}</p>
-        <button onClick={() => window.location.reload()} className="bg-indigo-600 text-white px-8 py-3 rounded-2xl font-black">새로고침</button>
-      </div>
-    );
-  }
-
-  // 4. 로그인 화면
   if (!user) return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-indigo-600 to-purple-800 p-4">
       <div className="text-center text-white mb-10">
@@ -161,7 +141,6 @@ const App: React.FC = () => {
     </div>
   );
 
-  // 5. 교사 학급 선택 화면 (Picker)
   if (user.role === 'teacher' && (showPicker || !selectedClass)) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col p-6 animate-in fade-in duration-500">
@@ -178,15 +157,11 @@ const App: React.FC = () => {
         <div className="max-w-5xl w-full mx-auto flex-1 flex flex-col justify-center pb-20">
           <div className="text-center mb-16">
             <h2 className="text-5xl font-black text-slate-900 mb-4 tracking-tight">반갑습니다, {user.name} 선생님!</h2>
-            <p className="text-xl text-slate-400 font-medium">관리하실 학급을 선택하거나 새 학급을 생성하여 경제 활동을 시작하세요.</p>
+            <p className="text-xl text-slate-400 font-medium">관리하실 학급을 선택하거나 새 학급을 생성하세요.</p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
             {myClasses.map(c => (
-              <button 
-                key={c.id} 
-                onClick={() => handleSelectClass(c)}
-                className="bg-white p-10 rounded-[3rem] border-2 border-transparent hover:border-indigo-600 hover:shadow-2xl hover:-translate-y-2 transition-all text-left group shadow-xl shadow-slate-200/50 flex flex-col h-64 justify-between"
-              >
+              <button key={c.id} onClick={() => handleSelectClass(c)} className="bg-white p-10 rounded-[3rem] border-2 border-transparent hover:border-indigo-600 hover:shadow-2xl hover:-translate-y-2 transition-all text-left group shadow-xl shadow-slate-200/50 flex flex-col h-64 justify-between">
                 <div className="bg-indigo-50 w-16 h-16 rounded-3xl flex items-center justify-center text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white transition-all">
                   <GraduationCap size={32}/>
                 </div>
@@ -210,13 +185,17 @@ const App: React.FC = () => {
                 };
                 try {
                   const { data, error: insertError } = await supabase.from('economy_settings').insert(newSession).select().single();
-                  if (insertError) throw insertError;
+                  if (insertError) {
+                    console.error("Insert Error:", insertError);
+                    alert(`학급 생성 실패: ${insertError.message}\n(테이블이 생성되었는지 확인해 주세요)`);
+                    return;
+                  }
                   if (data) {
-                    setMyClasses([...myClasses, data]);
+                    setMyClasses(prev => [...prev, data]);
                     handleSelectClass(data);
                   }
                 } catch (e: any) {
-                  alert("학급 생성 중 오류: " + e.message);
+                  alert("학급 생성 중 알 수 없는 오류: " + e.message);
                 }
               }}
               className="bg-white p-10 rounded-[3rem] border-2 border-dashed border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/30 transition-all flex flex-col items-center justify-center gap-6 text-slate-300 hover:text-emerald-600 h-64"
@@ -230,7 +209,6 @@ const App: React.FC = () => {
     );
   }
 
-  // 6. 메인 대시보드 화면
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
       <nav className="bg-white border-b border-slate-100 px-8 py-4 flex justify-between items-center sticky top-0 z-50 shadow-sm backdrop-blur-md bg-white/80">
