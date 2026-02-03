@@ -175,27 +175,50 @@ const App: React.FC = () => {
               onClick={async () => {
                 const name = prompt('학급 이름을 입력하세요 (예: 6학년 1반)');
                 if (!name) return;
-                const newSession = {
+                
+                // 에러 발생을 피하기 위해 필수적인 값만 먼저 넣어보고 
+                // 컬럼 에러가 발생하면 컬럼을 제외한 객체로 재시도하는 로직을 추가합니다.
+                const sessionCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+                const baseSession = {
                   teacher_id: user.id, 
                   class_name: name,
-                  session_code: Math.random().toString(36).substring(2, 8).toUpperCase(),
-                  school_level: 'elementary', 
-                  auto_approve_estate: false, 
+                  session_code: sessionCode,
+                  school_level: 'elementary',
                   quiz_count_per_day: 1
                 };
+
                 try {
-                  const { data, error: insertError } = await supabase.from('economy_settings').insert(newSession).select().single();
+                  // 전체 데이터를 넣어 시도
+                  const { data, error: insertError } = await supabase
+                    .from('economy_settings')
+                    .insert({ ...baseSession, auto_approve_estate: false })
+                    .select()
+                    .single();
+
                   if (insertError) {
-                    console.error("Insert Error:", insertError);
-                    alert(`학급 생성 실패: ${insertError.message}\n(테이블이 생성되었는지 확인해 주세요)`);
-                    return;
-                  }
-                  if (data) {
+                    // 만약 특정 컬럼 에러라면 해당 컬럼만 빼고 재시도 (DB 스키마가 안 맞을 경우 대비)
+                    if (insertError.message.includes('auto_approve_estate')) {
+                      const { data: retryData, error: retryError } = await supabase
+                        .from('economy_settings')
+                        .insert(baseSession)
+                        .select()
+                        .single();
+                      
+                      if (retryError) throw retryError;
+                      if (retryData) {
+                        setMyClasses(prev => [...prev, retryData]);
+                        handleSelectClass(retryData);
+                      }
+                    } else {
+                      throw insertError;
+                    }
+                  } else if (data) {
                     setMyClasses(prev => [...prev, data]);
                     handleSelectClass(data);
                   }
                 } catch (e: any) {
-                  alert("학급 생성 중 알 수 없는 오류: " + e.message);
+                  console.error("Create Class Error:", e);
+                  alert(`학급 생성 오류: ${e.message}\n\nSQL Editor에서 컬럼 추가 쿼리를 실행했는지 확인해 주세요.`);
                 }
               }}
               className="bg-white p-10 rounded-[3rem] border-2 border-dashed border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/30 transition-all flex flex-col items-center justify-center gap-6 text-slate-300 hover:text-emerald-600 h-64"
