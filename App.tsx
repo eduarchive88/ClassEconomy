@@ -28,7 +28,14 @@ const App: React.FC = () => {
         if (sessionError) throw sessionError;
 
         if (session?.user) {
-          const name = session.user.user_metadata?.full_name || session.user.email?.split('@')[0];
+          // profiles 테이블에서 실제 이름 확인
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('full_name')
+            .eq('id', session.user.id)
+            .single();
+
+          const name = profile?.full_name || session.user.user_metadata?.full_name || session.user.email?.split('@')[0];
           const teacher = { role: 'teacher' as const, id: session.user.id, name };
           setUser(teacher);
           await fetchClasses(teacher.id);

@@ -2,6 +2,14 @@
 export type UserRole = 'teacher' | 'student';
 export type SchoolLevel = 'elementary' | 'middle' | 'high';
 
+export interface Profile {
+  id: string;
+  full_name: string;
+  email: string;
+  role: UserRole;
+  updated_at?: string;
+}
+
 export interface Student {
   id: string; // 학번
   name: string;

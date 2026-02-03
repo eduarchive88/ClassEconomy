@@ -29,7 +29,9 @@ const LoginScreen: React.FC<Props> = ({ onLogin }) => {
     try {
       if (isSignUp) {
         if (!teacherName) throw new Error('성함을 입력해 주세요.');
-        const { data, error } = await supabase.auth.signUp({ 
+        
+        // 1. Auth SignUp
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ 
           email, 
           password,
           options: {
@@ -38,15 +40,47 @@ const LoginScreen: React.FC<Props> = ({ onLogin }) => {
             }
           }
         });
-        if (error) throw error;
+        
+        if (signUpError) throw signUpError;
+        
+        // 2. 가입 직후 또는 인증 이메일 확인 전에도 profiles 테이블에 미리 정보 기록 (나중에 로그인 시 보강됨)
+        if (signUpData.user) {
+          await supabase.from('profiles').upsert({
+            id: signUpData.user.id,
+            full_name: teacherName,
+            email: email,
+            role: 'teacher'
+          });
+        }
+
         alert('가입 확인 이메일이 발송되었습니다. 이메일을 확인하고 로그인을 진행해 주세요!');
         setIsSignUp(false);
       } else {
+        // SignIn
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        
         if (data.user) {
-          const name = data.user.user_metadata?.full_name || data.user.email?.split('@')[0];
-          onLogin('teacher', data.user.email || data.user.id, name);
+          // 3. 로그인 성공 시 profiles 테이블에서 정보 확인 및 업데이트
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', data.user.id)
+            .single();
+
+          const name = profile?.full_name || data.user.user_metadata?.full_name || data.user.email?.split('@')[0];
+          
+          // 프로필이 없다면(메타데이터만 있다면) 생성
+          if (!profile) {
+            await supabase.from('profiles').upsert({
+              id: data.user.id,
+              full_name: name,
+              email: data.user.email,
+              role: 'teacher'
+            });
+          }
+
+          onLogin('teacher', data.user.id, name);
         }
       }
     } catch (error: any) {
