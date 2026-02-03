@@ -5,9 +5,6 @@ export type SchoolLevel = 'elementary' | 'middle' | 'high';
 export interface Student {
   id: string; // 학번
   name: string;
-  grade: string;
-  class: string;
-  number: string;
   password?: string;
   salary: number; // 주급
   balance: number; // 현금
@@ -15,6 +12,7 @@ export interface Student {
   brokerage_balance: number; // 증권
   teacher_id: string;
   session_code: string;
+  created_at?: string;
 }
 
 export interface Transaction {
@@ -25,16 +23,8 @@ export interface Transaction {
   receiver_id: string;
   receiver_name: string;
   amount: number;
-  type: 'transfer' | 'tax' | 'salary' | 'market' | 'stock' | 'fine' | 'reward' | 'interest' | 'quiz';
+  type: 'transfer' | 'tax' | 'salary' | 'market' | 'stock' | 'fine' | 'reward' | 'interest' | 'quiz' | 'real_estate';
   description: string;
-  created_at: string;
-}
-
-export interface SavingsRecord {
-  id: string;
-  student_id: string;
-  amount: number;
-  account_type: 'bank' | 'brokerage';
   created_at: string;
 }
 
@@ -51,8 +41,6 @@ export interface EconomySettings {
   tax_amount?: number;
   salary_day?: number;
   salary_time?: string;
-  last_auto_tax_date?: string;
-  last_auto_salary_date?: string;
 }
 
 export interface Quiz {
@@ -65,18 +53,13 @@ export interface Quiz {
   session_code: string;
 }
 
-export interface MarketItem {
-  id: string;
-  name: string;
-  price: number;
-  teacher_id: string;
-}
-
 export interface Seat {
-  id: number;
+  id: string;
+  row_idx: number;
+  col_idx: number;
   owner_id?: string;
   owner_name?: string;
+  price_at_buy?: number;
   status: 'available' | 'pending' | 'sold';
-  pending_buyer_id?: string;
-  teacher_id: string;
+  session_code: string;
 }
