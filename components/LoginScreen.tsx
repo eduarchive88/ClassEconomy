@@ -1,7 +1,6 @@
 
 import React, { useState } from 'react';
-// Added GraduationCap to imports
-import { KeyRound, Hash, LogIn, Mail, UserPlus, Fingerprint, ShieldCheck, GraduationCap } from 'lucide-react';
+import { KeyRound, Hash, LogIn, Mail, UserPlus, Fingerprint, ShieldCheck, GraduationCap, User } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
 
 interface Props {
@@ -15,6 +14,7 @@ const LoginScreen: React.FC<Props> = ({ onLogin }) => {
   // Teacher State
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [teacherName, setTeacherName] = useState('');
   
   // Student State
   const [studentId, setStudentId] = useState('');
@@ -28,12 +28,13 @@ const LoginScreen: React.FC<Props> = ({ onLogin }) => {
     setIsLoading(true);
     try {
       if (isSignUp) {
-        const { error } = await supabase.auth.signUp({ 
+        if (!teacherName) throw new Error('성함을 입력해 주세요.');
+        const { data, error } = await supabase.auth.signUp({ 
           email, 
           password,
           options: {
             data: {
-              full_name: email.split('@')[0],
+              full_name: teacherName,
             }
           }
         });
@@ -106,6 +107,15 @@ const LoginScreen: React.FC<Props> = ({ onLogin }) => {
           </div>
           
           <form onSubmit={handleTeacherAuth} className="space-y-4">
+            {isSignUp && (
+              <div className="space-y-1 animate-in fade-in slide-in-from-top-2 duration-300">
+                <label className="text-[10px] font-black text-slate-400 ml-1 uppercase">Teacher Name</label>
+                <div className="relative">
+                  <User className="absolute left-4 top-4 text-slate-400" size={18}/>
+                  <input type="text" value={teacherName} onChange={(e) => setTeacherName(e.target.value)} placeholder="성함을 입력하세요" className="w-full pl-12 pr-4 py-4 bg-slate-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-bold" required={isSignUp} />
+                </div>
+              </div>
+            )}
             <div className="space-y-1">
               <label className="text-[10px] font-black text-slate-400 ml-1 uppercase">Email Address</label>
               <div className="relative">
