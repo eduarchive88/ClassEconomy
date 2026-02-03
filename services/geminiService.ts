@@ -8,7 +8,9 @@ const getApiKey = () => {
     const savedKey = localStorage.getItem(`google_api_key_${lastClassId}`);
     if (savedKey) return savedKey;
   }
-  return process.env.API_KEY || '';
+  // process가 정의되지 않은 환경에서도 에러가 발생하지 않도록 안전하게 접근합니다.
+  const env = (typeof process !== 'undefined' && process.env) ? process.env : ({} as any);
+  return env.API_KEY || '';
 };
 
 export const generateAIQuiz = async (topic: string, count: number, schoolLevel: string) => {

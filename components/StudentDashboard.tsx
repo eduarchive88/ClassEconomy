@@ -1,10 +1,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { 
-  Wallet, Landmark, LineChart, ShoppingBag, Send, History, HelpCircle, CheckCircle2, TrendingUp, Package
+  Wallet, Landmark, LineChart, ShoppingBag, Map, Send, Search, History, HelpCircle, CheckCircle2, Clock, User, CheckSquare, Square,
+  TrendingUp, TrendingDown, ExternalLink, Sparkles, X, ChevronRight, Newspaper, Package
 } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
-import { getMarketData, getEconomyNews } from '../services/geminiService';
+import { getMarketData, getEconomyNews, summarizeNews } from '../services/geminiService';
 import { Student, Transaction, Quiz, SavingsRecord, EconomySettings } from '../types';
 
 interface Props {
@@ -20,17 +21,25 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
   const [sessionSettings, setSessionSettings] = useState<EconomySettings | null>(null);
   const [marketItems, setMarketItems] = useState<any[]>([]);
   
+  // 퀴즈 관련
   const [dailyQuizzes, setDailyQuizzes] = useState<Quiz[]>([]);
   const [solvedQuizIds, setSolvedQuizIds] = useState<string[]>([]);
   
+  // 이체 및 송금 관련
   const [transferAmount, setTransferAmount] = useState(0);
   const [selectedRecipientIds, setSelectedRecipientIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
+  // 이체 경로 선택 상태
   const [bankPath, setBankPath] = useState<{from: string, to: string} | null>(null);
   const [investPath, setInvestPath] = useState<{from: string, to: string} | null>(null);
 
+  // 투자 및 뉴스 관련
   const [marketData, setMarketData] = useState<{ stocks: any[], coins: any[] }>({ stocks: [], coins: [] });
+  const [economyNews, setEconomyNews] = useState<any[]>([]);
+  const [selectedNews, setSelectedNews] = useState<any | null>(null);
+  const [newsSummary, setNewsSummary] = useState('');
+  const [isSummarizing, setIsSummarizing] = useState(false);
 
   useEffect(() => {
     fetchStudentData();
@@ -41,8 +50,9 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
       const loadInvestData = async () => {
         setIsLoading(true);
         try {
-          const m = await getMarketData();
+          const [m, n] = await Promise.all([getMarketData(), getEconomyNews()]);
           if (m) setMarketData(m);
+          if (n) setEconomyNews(n);
         } catch (e) { console.error(e); }
         finally { setIsLoading(false); }
       };
@@ -75,11 +85,10 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
 
   const fetchQuizzes = async (code: string) => {
     const { data: settings } = await supabase.from('economy_settings').select('quiz_count_per_day').eq('session_code', code).single();
-    const count = settings?.quiz_count_per_day || 1;
+    const count = settings?.quiz_count_per_day || 0;
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
     const { data: allQuizzes } = await supabase.from('quizzes').select('*').eq('session_code', code);
-    
     if (allQuizzes && allQuizzes.length > 0) {
       const seededRandom = (seed: string) => {
         let h = 0; for(let i=0; i<seed.length; i++) h = Math.imul(31, h) + seed.charCodeAt(i) | 0;
@@ -134,35 +143,24 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
     if (solvedQuizIds.includes(quiz.id)) return;
     const isCorrect = quiz.answer === selectedIdx;
     const dateStr = new Date().toISOString().split('T')[0];
-    
-    setIsLoading(true);
-    try {
-      await supabase.from('quiz_attempts').insert({ student_id: studentId, quiz_id: quiz.id, attempt_date: dateStr, is_correct: isCorrect });
-      setSolvedQuizIds(prev => [...prev, quiz.id]);
-
-      if (isCorrect) {
-        await supabase.from('students').update({ balance: student!.balance + quiz.reward }).eq('id', studentId);
-        await supabase.from('transactions').insert({
-          session_code: student!.session_code, sender_id: 'GOVERNMENT', sender_name: '정부',
-          receiver_id: studentId, receiver_name: student!.name, amount: quiz.reward, type: 'quiz', description: '퀴즈 정답 보상'
-        });
-        alert('정답입니다! 보상이 지급되었습니다.');
-      } else {
-        alert('아쉽지만 오답입니다. 이 문제는 오늘 더 이상 풀 수 없습니다.');
-      }
-      fetchStudentData();
-    } catch (e) {
-      alert('퀴즈 처리 중 오류가 발생했습니다.');
-    } finally {
-      setIsLoading(false);
-    }
+    await supabase.from('quiz_attempts').insert({ student_id: studentId, quiz_id: quiz.id, attempt_date: dateStr, is_correct: isCorrect });
+    if (isCorrect) {
+      await supabase.from('students').update({ balance: student!.balance + quiz.reward }).eq('id', studentId);
+      await supabase.from('transactions').insert({
+        session_code: student!.session_code, sender_id: 'GOVERNMENT', sender_name: '정부',
+        receiver_id: studentId, receiver_name: student!.name, amount: quiz.reward, type: 'quiz', description: '퀴즈 정답 보상'
+      });
+      alert('정답!');
+    } else alert('오답');
+    fetchStudentData();
   };
 
   const handleSendMoney = async () => {
     if (!student || transferAmount <= 0 || selectedRecipientIds.length === 0) return;
     const totalAmount = transferAmount * selectedRecipientIds.length;
     if (student.balance < totalAmount) return alert('현금이 부족합니다.');
-    if (!confirm(`${selectedRecipientIds.length}명에게 각 ${transferAmount.toLocaleString()}원씩 송금하시겠습니까?`)) return;
+    
+    if (!confirm(`${selectedRecipientIds.length}명에게 각각 ${transferAmount.toLocaleString()}원씩 총 ${totalAmount.toLocaleString()}원을 송금하시겠습니까?`)) return;
 
     setIsLoading(true);
     try {
@@ -172,20 +170,33 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
           const friend = friends.find(f => f.id === recipientId);
           if (friend) {
             receiverName = friend.name;
-            await supabase.rpc('increment_balance', { row_id: recipientId, amount: transferAmount });
+            await supabase.from('students').update({ balance: (friend.balance || 0) + transferAmount }).eq('id', recipientId);
           }
         }
+        
         await supabase.from('transactions').insert({
-          session_code: student.session_code, sender_id: studentId, sender_name: student.name,
-          receiver_id: recipientId, receiver_name: receiverName, amount: transferAmount, type: 'transfer',
-          description: recipientId === 'GOVERNMENT' ? '정부 납부' : '송금'
+          session_code: student.session_code,
+          sender_id: studentId,
+          sender_name: student.name,
+          receiver_id: recipientId,
+          receiver_name: receiverName,
+          amount: transferAmount,
+          type: 'transfer',
+          description: recipientId === 'GOVERNMENT' ? '정부 납부' : '개인 송금'
         });
       }
+      
       await supabase.from('students').update({ balance: student.balance - totalAmount }).eq('id', studentId);
       alert('송금 완료!');
-      setTransferAmount(0); setSelectedRecipientIds([]); fetchStudentData();
-    } catch (e) { alert('오류 발생'); }
-    finally { setIsLoading(false); }
+      setTransferAmount(0);
+      setSelectedRecipientIds([]);
+      fetchStudentData();
+    } catch (e) {
+      console.error(e);
+      alert('송금 처리 중 오류가 발생했습니다.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -277,7 +288,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
               {marketData.stocks.map((s, i) => {
                 const isUp = s.change && !s.change.includes('-');
                 return (
-                  <div key={i} className="bg-white p-5 rounded-3xl border shadow-sm flex flex-col justify-between h-40">
+                  <div key={i} className="bg-white p-5 rounded-3xl border shadow-sm flex flex-col justify-between h-40 hover:border-indigo-200 transition-all">
                     <div><p className="text-[10px] font-black text-indigo-500 mb-1">{s.ticker || 'STOCK'}</p><p className="text-xs font-bold text-slate-400">{s.name}</p></div>
                     <div className="flex justify-between items-end">
                       <h4 className="text-xl font-black">₩{s.price}</h4>
@@ -305,9 +316,16 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
               </div>
               <h4 className="text-lg font-black text-slate-800 mb-1">{item.name}</h4>
               <p className="text-xl font-black text-indigo-600 mb-4">₩{item.price.toLocaleString()}</p>
-              <button onClick={() => handleBuyItem(item)} disabled={isLoading || (item.stock !== undefined && item.stock <= 0)} className="w-full py-3 bg-slate-900 text-white rounded-2xl font-bold">구매하기</button>
+              <button 
+                onClick={() => handleBuyItem(item)}
+                disabled={isLoading || (item.stock !== undefined && item.stock <= 0)}
+                className="w-full py-3 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 disabled:opacity-50 transition-all"
+              >
+                구매하기
+              </button>
             </div>
           ))}
+          {marketItems.length === 0 && <div className="col-span-full py-20 text-center text-slate-400 font-bold">판매 중인 물품이 없습니다.</div>}
         </div>
       )}
 
@@ -316,22 +334,29 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
           {dailyQuizzes.map((quiz, i) => {
             const solved = solvedQuizIds.includes(quiz.id);
             return (
-              <div key={quiz.id} className={`bg-white p-8 rounded-3xl border shadow-sm transition-all ${solved ? 'bg-slate-50 border-slate-200 opacity-60' : 'border-indigo-100 ring-2 ring-indigo-50'}`}>
+              <div key={quiz.id} className={`bg-white p-8 rounded-3xl border shadow-sm transition-all ${solved ? 'bg-slate-50 border-slate-200' : 'border-indigo-100 ring-2 ring-indigo-50'}`}>
                 <div className="flex items-center gap-3 mb-6">
                   <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-black ${solved ? 'bg-slate-200 text-slate-500' : 'bg-indigo-600 text-white'}`}>{i + 1}</div>
                   <h3 className="text-lg font-black text-slate-800 leading-tight">{quiz.question}</h3>
                 </div>
                 <div className="grid grid-cols-1 gap-3">
                   {quiz.options.map((opt, oIdx) => (
-                    <button key={oIdx} onClick={() => !solved && handleQuizSolve(quiz, oIdx + 1)} disabled={solved || isLoading} className={`w-full p-4 border rounded-2xl text-left font-bold text-sm transition-all ${solved ? 'bg-white border-slate-100 text-slate-300 cursor-not-allowed' : 'hover:border-indigo-600 hover:bg-indigo-50 border-slate-100 text-slate-600'}`}>
+                    <button 
+                      key={oIdx} 
+                      onClick={() => !solved && handleQuizSolve(quiz, oIdx + 1)} 
+                      disabled={solved} 
+                      className={`w-full p-4 border rounded-2xl text-left font-bold text-sm transition-all ${solved ? 'bg-white border-slate-100 text-slate-300' : 'hover:border-indigo-600 hover:bg-indigo-50 border-slate-100 text-slate-600'}`}
+                    >
                       <span className="mr-3 opacity-40">{oIdx + 1}.</span> {opt}
                     </button>
                   ))}
                 </div>
                 {solved && <div className="mt-6 flex items-center justify-center gap-2 text-emerald-600 font-black bg-emerald-50 py-3 rounded-2xl"><CheckCircle2 size={18}/> 참여 완료</div>}
+                {!solved && <div className="mt-6 text-center text-[10px] font-bold text-slate-400 italic">정답 보상: ₩{quiz.reward.toLocaleString()}</div>}
               </div>
             );
           })}
+          {dailyQuizzes.length === 0 && <div className="col-span-full py-20 text-center text-slate-400 font-bold">오늘 출제된 퀴즈가 없습니다.</div>}
         </div>
       )}
 
@@ -340,7 +365,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
           <table className="w-full text-left text-sm whitespace-nowrap">
             <thead>
               <tr className="bg-slate-50 border-y text-slate-500 font-bold">
-                <th className="px-4 py-3">날짜</th><th className="px-4 py-3">구분</th><th className="px-4 py-3">내용</th><th className="px-4 py-3 text-right">금액</th>
+                <th className="px-4 py-3">날짜</th><th className="px-4 py-3">구분</th><th className="px-4 py-3">내용</th><th className="px-4 py-3">상대</th><th className="px-4 py-3 text-right">금액</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -349,6 +374,7 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
                   <td className="px-4 py-4 text-slate-400 text-xs">{new Date(log.created_at).toLocaleDateString()}</td>
                   <td className="px-4 py-4 font-bold">{log.type}</td>
                   <td className="px-4 py-4 text-slate-600">{log.description}</td>
+                  <td className="px-4 py-4 font-bold">{log.sender_id === studentId ? log.receiver_name : log.sender_name}</td>
                   <td className={`px-4 py-4 text-right font-black ${log.sender_id === studentId ? 'text-red-500' : 'text-emerald-600'}`}>
                     {log.sender_id === studentId ? '-' : '+'}{log.amount.toLocaleString()}원
                   </td>
