@@ -51,6 +51,15 @@ export interface EconomySettings {
   salary_time?: string;
 }
 
+export interface MarketItem {
+  id: string;
+  name: string;
+  price: number;
+  quantity: number;
+  teacher_id: string;
+  created_at?: string;
+}
+
 export interface Quiz {
   id: string;
   question: string;
