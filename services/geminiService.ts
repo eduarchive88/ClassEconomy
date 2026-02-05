@@ -1,7 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
-// API 키는 오직 process.env.API_KEY에서만 가져와야 합니다.
 export const generateAIQuiz = async (topic: string, count: number, schoolLevel: string) => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const response = await ai.models.generateContent({

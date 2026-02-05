@@ -1,29 +1,65 @@
 
 import React, { useState, useEffect } from 'react';
 import { 
-  Wallet, Landmark, LineChart, ShoppingBag, Send, History, HelpCircle, 
-  CheckCircle2, TrendingUp, Package, ArrowRightLeft, Layout, Newspaper, 
-  Sparkles, ExternalLink, Lock, Settings, Plus, Clock, AlertCircle
+  Wallet, Landmark, LineChart, ShoppingBag, Map, Send, Search, History, HelpCircle, CheckCircle2, Clock, User, CheckSquare, Square,
+  TrendingUp, TrendingDown, ExternalLink, Sparkles, X, ChevronRight, Newspaper
 } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
 import { getMarketData, getEconomyNews, summarizeNews } from '../services/geminiService';
-import { Student, Transaction, Quiz, EconomySettings, Seat, MarketItem } from '../types';
+import { Student, Transaction, Quiz, SavingsRecord, EconomySettings } from '../types';
 
-interface Props { studentId: string; }
+interface Props {
+  studentId: string;
+}
 
 const StudentDashboard: React.FC<Props> = ({ studentId }) => {
   const [activeTab, setActiveTab] = useState('transfer'); 
   const [student, setStudent] = useState<Student | null>(null);
   const [friends, setFriends] = useState<Student[]>([]);
+  const [logs, setLogs] = useState<Transaction[]>([]);
+  const [savings, setSavings] = useState<SavingsRecord[]>([]);
   const [sessionSettings, setSessionSettings] = useState<EconomySettings | null>(null);
-  const [seats, setSeats] = useState<Seat[]>([]);
-  const [marketItems, setMarketItems] = useState<MarketItem[]>([]);
-  const [totalEconomyAsset, setTotalEconomyAsset] = useState(0);
-  const [news, setNews] = useState<any[]>([]);
-  const [summary, setSummary] = useState<{ [key: string]: string }>({});
+  
+  // 퀴즈 관련
+  const [dailyQuizzes, setDailyQuizzes] = useState<Quiz[]>([]);
+  const [solvedQuizIds, setSolvedQuizIds] = useState<string[]>([]);
+  
+  // 이체 및 송금 관련
+  const [transferAmount, setTransferAmount] = useState(0);
+  const [selectedRecipientIds, setSelectedRecipientIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  useEffect(() => { fetchStudentData(); }, [studentId, activeTab]);
+  // 이체 경로 선택 상태
+  const [bankPath, setBankPath] = useState<{from: string, to: string} | null>(null);
+  const [investPath, setInvestPath] = useState<{from: string, to: string} | null>(null);
+
+  // 투자 및 뉴스 관련
+  const [marketData, setMarketData] = useState<{ stocks: any[], coins: any[] }>({ stocks: [], coins: [] });
+  const [economyNews, setEconomyNews] = useState<any[]>([]);
+  const [selectedNews, setSelectedNews] = useState<any | null>(null);
+  const [newsSummary, setNewsSummary] = useState('');
+  const [isSummarizing, setIsSummarizing] = useState(false);
+
+  useEffect(() => {
+    fetchStudentData();
+  }, [studentId, activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'invest') {
+      const loadInvestData = async () => {
+        setIsLoading(true);
+        try {
+          const [m, n] = await Promise.all([getMarketData(), getEconomyNews()]);
+          if (m) setMarketData(m);
+          if (n) setEconomyNews(n);
+        } catch (e) { console.error(e); }
+        finally { setIsLoading(false); }
+      };
+      loadInvestData();
+      const timer = setInterval(loadInvestData, 3600000); // 1시간
+      return () => clearInterval(timer);
+    }
+  }, [activeTab]);
 
   const fetchStudentData = async () => {
     const { data: st } = await supabase.from('students').select('*').eq('id', studentId).single();
@@ -32,215 +68,483 @@ const StudentDashboard: React.FC<Props> = ({ studentId }) => {
       const { data: setts } = await supabase.from('economy_settings').select('*').eq('session_code', st.session_code).single();
       if (setts) setSessionSettings(setts);
       
-      const { data: allSts } = await supabase.from('students').select('*').eq('session_code', st.session_code);
-      if (allSts) {
-        setFriends(allSts.filter(f => f.id !== studentId));
-        const total = allSts.reduce((acc, curr) => acc + (curr.balance + curr.bank_balance + curr.brokerage_balance), 0);
-        setTotalEconomyAsset(total);
-      }
+      const { data: fr } = await supabase.from('students').select('*').eq('session_code', st.session_code).neq('id', studentId).order('id', { ascending: true });
+      if (fr) setFriends(fr);
+      const { data: tx } = await supabase.from('transactions').select('*').or(`sender_id.eq.${studentId},receiver_id.eq.${studentId}`).order('created_at', { ascending: false }).limit(20);
+      if (tx) setLogs(tx);
+      const { data: sv } = await supabase.from('savings_records').select('*').eq('student_id', studentId);
+      if (sv) setSavings(sv);
+      
+      checkAndApplyAutoInterest(st, tx || []);
+      if (activeTab === 'quiz') fetchQuizzes(st.session_code);
+    }
+  };
 
-      if (activeTab === 'estate') {
-        const { data: stData } = await supabase.from('seats').select('*').eq('session_code', st.session_code).order('row_idx').order('col_idx');
-        if (stData) setSeats(stData);
-      } else if (activeTab === 'market') {
-        const { data: mData } = await supabase.from('market_items').select('*').eq('teacher_id', st.teacher_id);
-        if (mData) setMarketItems(mData);
+  const checkAndApplyAutoInterest = async (st: Student, txLogs: Transaction[]) => {
+    if (st.bank_balance <= 0) return;
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    const lastInterestTx = txLogs.find(tx => tx.type === 'interest');
+    const recentlyPaid = lastInterestTx && new Date(lastInterestTx.created_at) > oneWeekAgo;
+    if (!recentlyPaid) {
+      const { data: oldSavings } = await supabase.from('savings_records').select('*').eq('student_id', st.id).eq('account_type', 'bank').lt('created_at', oneWeekAgo.toISOString()).limit(1);
+      if (oldSavings && oldSavings.length > 0) {
+        const weeklyRate = 0.02 / 52;
+        const interestAmount = Math.floor(st.bank_balance * weeklyRate);
+        if (interestAmount > 0) {
+          await supabase.from('students').update({ bank_balance: st.bank_balance + interestAmount }).eq('id', st.id);
+          await supabase.from('transactions').insert({
+            session_code: st.session_code, sender_id: 'GOVERNMENT', sender_name: '정부',
+            receiver_id: st.id, receiver_name: st.name, amount: interestAmount, type: 'interest',
+            description: '자동 주간 이자 지급 (연 2%)'
+          });
+          const { data: updatedSt } = await supabase.from('students').select('*').eq('id', studentId).single();
+          if (updatedSt) setStudent(updatedSt);
+        }
       }
     }
   };
 
-  // 부동산 가격 알고리즘: (총 학생 자산 * 60%) / 학생 수
-  const currentSeatPrice = Math.floor((totalEconomyAsset * 0.6) / (friends.length + 1) || 5000);
-
-  const handleBuySeat = async (seat: Seat) => {
-    if (!student || student.balance < currentSeatPrice) return alert('현금이 부족합니다.');
-    if (seat.owner_id === studentId) return alert('이미 본인의 자리입니다.');
-    if (seat.status === 'pending') return alert('현재 거래 승인 대기 중인 자리입니다.');
+  const fetchQuizzes = async (code: string) => {
+    const { data: settings } = await supabase.from('economy_settings').select('quiz_count_per_day').eq('session_code', code).single();
+    const count = settings?.quiz_count_per_day || 0;
+    if (count <= 0) { setDailyQuizzes([]); return; }
     
-    if (!confirm(`이 자리를 ${currentSeatPrice.toLocaleString()}원에 구매하시겠습니까?`)) return;
+    // 자정(00:00) 기준 갱신 로직
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    
+    const { data: allQuizzes } = await supabase.from('quizzes').select('*').eq('session_code', code);
+    
+    if (allQuizzes && allQuizzes.length > 0) {
+      const seededRandom = (seed: string) => {
+        let h = 0; for(let i=0; i<seed.length; i++) h = Math.imul(31, h) + seed.charCodeAt(i) | 0;
+        return () => { h = Math.imul(h ^ h >>> 16, 0x85ebca6b); h = Math.imul(h ^ h >>> 13, 0xc2b2ae35); return ((h ^= h >>> 16) >>> 0) / 4294967296; };
+      };
+      const rand = seededRandom(dateStr + code);
+      
+      const sortedByUsage = [...allQuizzes].sort((a, b) => {
+        const usageA = (a as any).usage_count || 0;
+        const usageB = (b as any).usage_count || 0;
+        if (usageA !== usageB) return usageA - usageB;
+        return rand() - 0.5;
+      });
+      
+      const selected = sortedByUsage.slice(0, count);
+      setDailyQuizzes(selected);
 
+      // 노출 횟수 업데이트
+      for (const q of selected) {
+        supabase.rpc('increment_quiz_usage', { quiz_id: q.id }).catch(() => {
+          supabase.from('quizzes').update({ usage_count: ((q as any).usage_count || 0) + 1 }).eq('id', q.id);
+        });
+      }
+    }
+
+    const { data: attempts } = await supabase.from('quiz_attempts').select('quiz_id').eq('student_id', studentId).eq('attempt_date', dateStr);
+    if (attempts) setSolvedQuizIds(attempts.map(a => a.quiz_id));
+  };
+
+  const handleAssetTransfer = async (from: string, to: string) => {
+    if (!student || transferAmount <= 0) return alert('금액을 입력해주세요.');
+    if (from === 'bank_balance') {
+      const myBankSavings = savings.filter(s => s.account_type === 'bank');
+      const now = new Date();
+      const availableAmount = myBankSavings
+        .filter(r => (now.getTime() - new Date(r.created_at).getTime()) >= 7 * 24 * 60 * 60 * 1000)
+        .reduce((sum, r) => sum + r.amount, 0);
+
+      if (transferAmount > availableAmount) {
+        alert(`출금 가능한 은행 금액이 부족합니다.\n(저축한 지 7일이 지나야 출금 가능합니다.\n현재 출금 가능액: ${availableAmount.toLocaleString()}원)`);
+        return;
+      }
+    }
+    const currentFromBalance = (student as any)[from];
+    if (currentFromBalance < transferAmount) return alert('잔액이 부족합니다.');
     setIsLoading(true);
     try {
-      const isAuto = sessionSettings?.auto_approve_estate;
-      
-      if (isAuto) {
-        // 즉시 구매 로직: 10% 수수료 환수, 90% 판매자 송금
-        const fee = Math.floor(currentSeatPrice * 0.1);
-        const sellerAmount = currentSeatPrice - fee;
-        const sellerId = seat.owner_id || 'GOVERNMENT';
-
-        // 1. 구매자 잔액 차감
-        await supabase.from('students').update({ balance: student.balance - currentSeatPrice }).eq('id', studentId);
-
-        // 2. 판매자 잔액 증액 (주인이 있을 경우만)
-        if (seat.owner_id) {
-          const { data: seller } = await supabase.from('students').select('balance').eq('id', seat.owner_id).single();
-          await supabase.from('students').update({ balance: (seller?.balance || 0) + sellerAmount }).eq('id', seat.owner_id);
-        }
-
-        // 3. 자리 정보 업데이트
-        await supabase.from('seats').update({ 
-          owner_id: studentId, owner_name: student.name, status: 'sold', price_at_buy: currentSeatPrice 
-        }).eq('id', seat.id);
-
-        // 4. 트랜잭션 기록
-        await supabase.from('transactions').insert({
-          session_code: student.session_code, sender_id: studentId, sender_name: student.name,
-          receiver_id: sellerId, receiver_name: seat.owner_name || '정부', amount: currentSeatPrice, 
-          type: 'real_estate', description: `좌석 구매 (세금 ${fee}원 제외 ${sellerAmount}원 송금)`
-        });
-
-        alert('즉시 구매가 완료되었습니다!');
-      } else {
-        // 승인 대기 로직: 돈은 미리 차감(Escrow)
-        await supabase.from('students').update({ balance: student.balance - currentSeatPrice }).eq('id', studentId);
-        await supabase.from('seats').update({ 
-          owner_id: studentId, owner_name: student.name, status: 'pending', price_at_buy: currentSeatPrice 
-        }).eq('id', seat.id);
-        alert('구매 요청을 보냈습니다. 선생님의 승인을 기다려 주세요.');
+      const updates = { [from]: currentFromBalance - transferAmount, [to]: (student as any)[to] + transferAmount };
+      await supabase.from('students').update(updates).eq('id', studentId);
+      if (to !== 'balance') {
+        await supabase.from('savings_records').insert({ student_id: studentId, amount: transferAmount, account_type: to === 'bank_balance' ? 'bank' : 'brokerage' });
       }
-      fetchStudentData();
-    } catch (e) { alert('처리 중 오류 발생'); }
+      await supabase.from('transactions').insert({
+        session_code: student.session_code, sender_id: student.id, sender_name: student.name,
+        receiver_id: student.id, receiver_name: student.name, amount: transferAmount, type: 'transfer',
+        description: `${from === 'balance' ? '현금' : from === 'bank_balance' ? '은행' : '증권'} → ${to === 'balance' ? '현금' : to === 'bank_balance' ? '은행' : '증권'} 이체`
+      });
+      alert('이체 완료!');
+      setTransferAmount(0); setBankPath(null); setInvestPath(null); fetchStudentData();
+    } catch (e) { alert('오류 발생'); }
     finally { setIsLoading(false); }
   };
 
-  const handleBuyMarketItem = async (item: MarketItem) => {
-    if (!student || student.balance < item.price) return alert('현금이 부족합니다.');
-    if (item.quantity <= 0) return alert('품절된 물품입니다.');
-    
-    if (!confirm(`${item.name}을(를) ${item.price.toLocaleString()}원에 구매하시겠습니까?`)) return;
-
+  const handleSendMoney = async () => {
+    if (!student || transferAmount <= 0 || selectedRecipientIds.length === 0) return alert('송금 대상과 금액을 확인해주세요.');
+    const totalRequired = transferAmount * selectedRecipientIds.length;
+    if (student.balance < totalRequired) return alert(`현금이 부족합니다. (필요 금액: ${totalRequired.toLocaleString()}원)`);
+    const recipientNames = selectedRecipientIds.map(id => id === 'GOVERNMENT' ? '정부' : friends.find(f => f.id === id)?.name).join(', ');
+    if (!confirm(`${recipientNames}님에게 각각 ${transferAmount.toLocaleString()}원씩 송금할까요?`)) return;
     setIsLoading(true);
     try {
-      // 1. 학생 돈 차감
-      await supabase.from('students').update({ balance: student.balance - item.price }).eq('id', studentId);
-      // 2. 물품 수량 차감
-      await supabase.from('market_items').update({ quantity: item.quantity - 1 }).eq('id', item.id);
-      // 3. 기록
-      await supabase.from('transactions').insert({
-        session_code: student.session_code, sender_id: studentId, sender_name: student.name,
-        receiver_id: 'MARKET', receiver_name: '학급 상점', amount: item.price, type: 'market', description: `${item.name} 구매`
-      });
-      alert(`${item.name} 구매 완료!`);
-      fetchStudentData();
-    } catch (e) { alert('구매 실패'); }
+      await supabase.from('students').update({ balance: student.balance - totalRequired }).eq('id', studentId);
+      for (const rId of selectedRecipientIds) {
+        const recipient = rId === 'GOVERNMENT' ? { id: 'GOVERNMENT', name: '정부' } : friends.find(f => f.id === rId);
+        if (!recipient) continue;
+        if (rId !== 'GOVERNMENT') {
+          const { data: rTarget } = await supabase.from('students').select('balance').eq('id', rId).single();
+          if (rTarget) await supabase.from('students').update({ balance: rTarget.balance + transferAmount }).eq('id', rId);
+        }
+        await supabase.from('transactions').insert({
+          session_code: student.session_code, sender_id: student.id, sender_name: student.name,
+          receiver_id: recipient.id, receiver_name: recipient.name, amount: transferAmount, type: 'transfer',
+          description: `${recipient.name}님에게 송금`
+        });
+      }
+      alert('송금 완료!');
+      setTransferAmount(0); setSelectedRecipientIds([]); fetchStudentData();
+    } catch (e) { alert('송금 중 오류가 발생했습니다.'); }
     finally { setIsLoading(false); }
+  };
+
+  const handleQuizSolve = async (quiz: Quiz, selectedIdx: number) => {
+    // 이미 푼 퀴즈인지 한 번 더 검증
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const { data: exists } = await supabase.from('quiz_attempts').select('id').eq('student_id', studentId).eq('quiz_id', quiz.id).eq('attempt_date', dateStr).single();
+    if (exists || solvedQuizIds.includes(quiz.id)) return alert('이미 오늘 참여한 퀴즈입니다.');
+
+    const isCorrect = quiz.answer === selectedIdx;
+    await supabase.from('quiz_attempts').insert({ student_id: studentId, quiz_id: quiz.id, attempt_date: dateStr, is_correct: isCorrect });
+    if (isCorrect) {
+      alert(`정답입니다! ${quiz.reward.toLocaleString()}원이 지급되었습니다.`);
+      await supabase.from('students').update({ balance: student!.balance + quiz.reward }).eq('id', studentId);
+      await supabase.from('transactions').insert({
+        session_code: student!.session_code, sender_id: 'GOVERNMENT', sender_name: '정부',
+        receiver_id: studentId, receiver_name: student!.name, amount: quiz.reward, type: 'quiz', description: `퀴즈 정답 보상: ${quiz.question.substring(0, 10)}...`
+      });
+    } else { alert('아쉽게도 틀렸습니다. 내일 다시 도전하세요!'); }
+    fetchQuizzes(student!.session_code);
+    fetchStudentData();
+  };
+
+  const handleSummarize = async () => {
+    if (!selectedNews || isSummarizing) return;
+    setIsSummarizing(true);
+    try {
+      const summary = await summarizeNews(selectedNews.title, sessionSettings?.school_level || 'elementary');
+      setNewsSummary(summary);
+    } catch (e) { console.error(e); }
+    finally { setIsSummarizing(false); }
+  };
+
+  const addAmount = (val: number) => setTransferAmount(p => p + val);
+
+  const getNextUnlockTime = () => {
+    const lockedRecords = savings.filter(s => s.account_type === 'bank').map(s => ({ ...s, unlockDate: new Date(new Date(s.created_at).getTime() + 7 * 24 * 60 * 60 * 1000) })).filter(s => s.unlockDate > new Date()).sort((a, b) => a.unlockDate.getTime() - b.unlockDate.getTime());
+    if (lockedRecords.length === 0) return null;
+    const diff = lockedRecords[0].unlockDate.getTime() - new Date().getTime();
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    if (days > 0) return `D-${days}`;
+    return `${hours}h`;
   };
 
   return (
     <div className="space-y-6 pb-20">
       {student && (
-        <div className="bg-indigo-600 p-8 rounded-[3rem] text-white shadow-xl shadow-indigo-100 flex flex-col md:flex-row justify-between items-center gap-6">
-          <div className="flex gap-10">
-            <div className="space-y-1">
-              <p className="text-[10px] font-black uppercase tracking-widest text-indigo-300">사용 가능 현금</p>
-              <h3 className="text-3xl font-black">{student.balance.toLocaleString()}원</h3>
-            </div>
-            <div className="space-y-1">
-              <p className="text-[10px] font-black uppercase tracking-widest text-indigo-300">총 자산</p>
-              <h3 className="text-3xl font-black">{(student.balance + student.bank_balance + student.brokerage_balance).toLocaleString()}원</h3>
-            </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-white p-6 rounded-2xl border shadow-sm border-b-4 border-b-indigo-500">
+            <p className="text-[10px] font-bold text-slate-400 mb-1">나의 현금</p>
+            <h3 className="text-2xl font-black text-slate-900">{student.balance.toLocaleString()}원</h3>
           </div>
-          <div className="bg-white/10 px-6 py-4 rounded-3xl backdrop-blur-md border border-white/20 flex items-center gap-3">
-            <TrendingUp size={20} className="text-emerald-400"/>
-            <div>
-              <p className="text-[10px] font-black uppercase text-indigo-200">현재 좌석 시세</p>
-              <p className="text-xl font-black">₩{currentSeatPrice.toLocaleString()}</p>
+          <div className="bg-white p-6 rounded-2xl border shadow-sm border-b-4 border-b-emerald-500 relative overflow-hidden">
+            <p className="text-[10px] font-bold text-slate-400 mb-1 flex justify-between items-center">
+              은행 (연 2% 복리)
+              {getNextUnlockTime() && <span className="text-rose-500 bg-rose-50 px-2 py-0.5 rounded text-[9px] font-black border border-rose-100 flex items-center gap-1"><Clock size={10}/>{getNextUnlockTime()}</span>}
+            </p>
+            <h3 className="text-2xl font-black text-slate-900">{student.bank_balance.toLocaleString()}원</h3>
+            <Landmark size={40} className="absolute -right-2 -bottom-2 text-emerald-50 opacity-10" />
+          </div>
+          <div className="bg-white p-6 rounded-2xl border shadow-sm border-b-4 border-b-amber-500">
+            <p className="text-[10px] font-bold text-slate-400 mb-1">증권 (투자용)</p>
+            <h3 className="text-2xl font-black text-slate-900">{student.brokerage_balance.toLocaleString()}원</h3>
+          </div>
+        </div>
+      )}
+
+      <nav className="flex bg-white p-1 rounded-2xl border sticky top-20 z-40 overflow-x-auto no-scrollbar">
+        {[
+          { id: 'transfer', label: '송금', icon: <Send size={16}/> },
+          { id: 'bank', label: '은행 저축', icon: <Landmark size={16}/> },
+          { id: 'invest', label: '증권 투자', icon: <LineChart size={16}/> },
+          { id: 'quiz', label: '일일퀴즈', icon: <HelpCircle size={16}/> },
+          { id: 'market', label: '상점', icon: <ShoppingBag size={16}/> },
+          { id: 'estate', label: '부동산', icon: <Map size={16}/> },
+        ].map(tab => (
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex-1 min-w-[80px] flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === tab.id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>
+            {tab.icon} <span>{tab.label}</span>
+          </button>
+        ))}
+      </nav>
+
+      {activeTab === 'transfer' && (
+        <div className="bg-white p-6 md:p-8 rounded-3xl border shadow-sm space-y-6">
+          <div className="text-center">
+            <h2 className="text-2xl font-black text-slate-800">현금 송금하기 💸</h2>
+            <p className="text-sm text-slate-400 mt-1">친구들을 선택하고 송금할 금액을 정하세요.</p>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div className="space-y-4">
+              <div className="flex justify-between items-center px-1">
+                <label className="text-xs font-bold text-slate-500">받는 사람 선택 (복수 선택 가능)</label>
+                <button onClick={() => setSelectedRecipientIds(selectedRecipientIds.length === friends.length + 1 ? [] : ['GOVERNMENT', ...friends.map(f => f.id)])} className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">전체 선택</button>
+              </div>
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-4 gap-2 max-h-[400px] overflow-y-auto p-4 bg-slate-50 rounded-2xl border border-dashed no-scrollbar">
+                <button onClick={() => setSelectedRecipientIds(p => p.includes('GOVERNMENT') ? p.filter(id => id !== 'GOVERNMENT') : [...p, 'GOVERNMENT'])} className={`py-3 px-1 rounded-xl border text-[11px] font-bold transition-all truncate ${selectedRecipientIds.includes('GOVERNMENT') ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-95' : 'bg-white text-slate-600 hover:border-indigo-200'}`}>정부</button>
+                {friends.map(f => (
+                  <button key={f.id} onClick={() => setSelectedRecipientIds(p => p.includes(f.id) ? p.filter(id => id !== f.id) : [...p, f.id])} className={`py-3 px-1 rounded-xl border text-[11px] font-bold transition-all truncate ${selectedRecipientIds.includes(f.id) ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-95' : 'bg-white text-slate-600 hover:border-indigo-200'}`}>{f.name}</button>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-6 flex flex-col justify-center bg-slate-50/50 p-6 rounded-2xl border">
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500 ml-1">송금할 금액 (1인당 기준)</label>
+                <div className="relative">
+                  <input type="number" value={transferAmount} onChange={(e)=>setTransferAmount(Math.max(0, Number(e.target.value)))} className="w-full p-5 bg-white border rounded-2xl text-2xl font-black text-center outline-none focus:ring-2 focus:ring-indigo-600" />
+                  <span className="absolute right-6 top-6 font-bold text-slate-400">원</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mt-2">
+                  {[100000, 50000, 10000, 5000, 1000].map(val => (
+                    <button key={val} onClick={() => addAmount(val)} className="py-2 bg-white border border-slate-200 rounded-lg text-[11px] font-bold text-slate-600 hover:bg-slate-50 hover:border-indigo-200 transition-all">+{val.toLocaleString()}</button>
+                  ))}
+                  <button onClick={() => setTransferAmount(0)} className="py-2 bg-red-50 border border-red-100 rounded-lg text-[11px] font-bold text-red-600 hover:bg-red-100 transition-all">초기화</button>
+                </div>
+              </div>
+              <div className="p-4 bg-white rounded-2xl border border-indigo-100 flex flex-col gap-1 shadow-sm">
+                <div className="flex justify-between text-sm font-bold text-slate-600"><span>선택 인원</span> <span>{selectedRecipientIds.length}명</span></div>
+                <div className="flex justify-between text-lg font-black text-indigo-600 border-t border-slate-100 pt-2 mt-1"><span>총 송금액</span> <span>{(transferAmount * selectedRecipientIds.length).toLocaleString()}원</span></div>
+              </div>
+              <button onClick={handleSendMoney} disabled={isLoading || selectedRecipientIds.length === 0} className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-xl hover:shadow-indigo-200 transition-all active:scale-95 disabled:opacity-50">{isLoading ? '송금 처리 중...' : '송금 실행하기'}</button>
             </div>
           </div>
         </div>
       )}
 
-      <nav className="flex bg-white p-2 rounded-3xl border shadow-sm sticky top-20 z-40 overflow-x-auto no-scrollbar gap-1">
-        {[
-          { id: 'transfer', label: '송금', icon: <Send size={18}/> },
-          { id: 'estate', label: '부동산', icon: <Layout size={18}/> },
-          { id: 'market', label: '상점', icon: <ShoppingBag size={18}/> },
-          { id: 'invest', label: '증권/뉴스', icon: <LineChart size={18}/> },
-          { id: 'quiz', label: '일일퀴즈', icon: <HelpCircle size={18}/> },
-        ].map(tab => (
-          <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex-1 min-w-[100px] py-4 rounded-2xl font-black text-sm transition-all flex flex-col items-center gap-1 ${activeTab === tab.id ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}>
-            {tab.icon} {tab.label}
-          </button>
-        ))}
-      </nav>
-
-      <div className="transition-all duration-300">
-        {activeTab === 'market' && (
-          <div className="bg-white p-10 rounded-[3rem] border shadow-sm">
-             <div className="text-center mb-10">
-               <h2 className="text-3xl font-black text-slate-800">학급 상점</h2>
-               <p className="text-slate-400 font-medium">선생님이 등록하신 물품을 현금으로 구매할 수 있습니다.</p>
-             </div>
-             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-               {marketItems.map(item => (
-                 <div key={item.id} className={`p-8 rounded-[2.5rem] border-2 transition-all flex flex-col justify-between ${item.quantity > 0 ? 'bg-white border-slate-100 hover:border-indigo-500 hover:shadow-xl' : 'bg-slate-50 border-transparent opacity-60'}`}>
-                   <div>
-                     <div className="bg-indigo-50 text-indigo-600 w-12 h-12 rounded-2xl flex items-center justify-center mb-6"><Package size={24}/></div>
-                     <h3 className="text-xl font-black text-slate-800 mb-1">{item.name}</h3>
-                     <p className="text-sm font-bold text-indigo-600 mb-4">{item.price.toLocaleString()}원</p>
-                   </div>
-                   <div>
-                     <p className="text-xs font-bold text-slate-400 mb-4">재고: {item.quantity}개</p>
-                     <button 
-                       disabled={isLoading || item.quantity <= 0}
-                       onClick={() => handleBuyMarketItem(item)}
-                       className={`w-full py-4 rounded-2xl font-black text-sm transition-all ${item.quantity > 0 ? 'bg-slate-900 text-white hover:bg-indigo-600' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}
-                     >
-                       {item.quantity > 0 ? '구매하기' : '품절'}
-                     </button>
-                   </div>
-                 </div>
-               ))}
-               {marketItems.length === 0 && <p className="col-span-full text-center py-20 text-slate-400 font-medium">현재 판매 중인 물품이 없습니다.</p>}
-             </div>
+      {activeTab === 'invest' && (
+        <div className="space-y-6">
+          <div className="bg-white p-8 rounded-3xl border shadow-sm">
+            <div className="flex flex-col md:flex-row gap-8">
+              <div className="flex-1 space-y-4">
+                <h3 className="text-lg font-bold flex items-center gap-2"><LineChart size={20} className="text-amber-500"/> 증권 계좌 이용하기</h3>
+                <div className="grid grid-cols-1 gap-3">
+                  <button onClick={() => setInvestPath({from: 'balance', to: 'brokerage_balance'})} className={`p-5 border rounded-2xl text-left transition-all border-l-8 ${investPath?.from === 'balance' ? 'bg-amber-50 border-amber-600 shadow-md ring-2 ring-amber-200 scale-102 border-l-amber-600' : 'bg-white hover:bg-slate-50 border-l-indigo-400'}`}>
+                    <p className="font-bold text-slate-800">현금 → 증권 (예수금 확보)</p>
+                    <p className="text-[11px] text-slate-400 mt-1">투자를 위한 자금을 준비합니다.</p>
+                  </button>
+                  <button onClick={() => setInvestPath({from: 'brokerage_balance', to: 'balance'})} className={`p-5 border rounded-2xl text-left transition-all border-l-8 ${investPath?.from === 'brokerage_balance' ? 'bg-amber-50 border-amber-600 shadow-md ring-2 ring-amber-200 scale-102 border-l-amber-600' : 'bg-white hover:bg-slate-50 border-l-amber-400'}`}>
+                    <p className="font-bold text-slate-800">증권 → 현금 (예수금 회수)</p>
+                    <p className="text-[11px] text-slate-400 mt-1">투자 자금을 다시 현금으로 가져옵니다.</p>
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 space-y-6">
+                <h3 className="text-lg font-bold">이체 실행</h3>
+                <div className="space-y-4 p-6 bg-slate-50 rounded-3xl border border-dashed">
+                  <div className="space-y-2">
+                    <input type="number" value={transferAmount} onChange={(e)=>setTransferAmount(Math.max(0, Number(e.target.value)))} className="w-full bg-white p-4 rounded-2xl text-2xl font-black text-center outline-none border focus:ring-2 focus:ring-amber-600" placeholder="금액 입력" />
+                    <div className="grid grid-cols-3 gap-2 mt-2">
+                      {[100000, 50000, 10000].map(val => (
+                        <button key={val} onClick={() => addAmount(val)} className="py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-500 hover:bg-slate-50 transition-all">+{val.toLocaleString()}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <button onClick={() => investPath ? handleAssetTransfer(investPath.from, investPath.to) : alert('이체 방향을 선택해주세요.')} className={`w-full py-4 rounded-2xl font-black shadow-lg transition-all ${investPath ? 'bg-amber-500 text-white hover:bg-amber-600 active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>{investPath ? `${investPath.from === 'balance' ? '확보' : '회수'} 실행하기` : '방향을 먼저 선택하세요'}</button>
+                </div>
+              </div>
+            </div>
           </div>
-        )}
 
-        {activeTab === 'estate' && (
-          <div className="bg-white p-10 rounded-[3rem] border shadow-sm">
-             <div className="text-center mb-10">
-               <h2 className="text-3xl font-black text-slate-800">좌석 거래소</h2>
-               <p className="text-slate-400 font-medium">인플레이션이 반영된 시세로 자리를 사고팔 수 있습니다.</p>
-             </div>
-             
-             <div className="grid grid-cols-6 gap-3 max-w-2xl mx-auto p-8 bg-slate-50 rounded-[3.5rem] border-4 border-white shadow-inner mb-10">
-               {seats.map(seat => (
-                 <button 
-                  key={seat.id} 
-                  onClick={() => handleBuySeat(seat)}
-                  disabled={isLoading || seat.owner_id === studentId || seat.status === 'pending'}
-                  className={`aspect-square rounded-2xl flex flex-col items-center justify-center border-2 transition-all group relative ${seat.owner_id === studentId ? 'bg-indigo-600 border-indigo-600' : seat.status === 'pending' ? 'bg-amber-100 border-amber-400 cursor-wait' : 'bg-white border-slate-100 hover:border-indigo-400'}`}
-                 >
-                   {seat.status === 'pending' ? (
-                     <Clock size={16} className="text-amber-600 animate-spin"/>
-                   ) : seat.owner_id === studentId ? (
-                     <CheckCircle2 size={16} className="text-white"/>
-                   ) : seat.owner_name ? (
-                     <span className="text-[10px] font-black text-slate-800">{seat.owner_name[0]}</span>
-                   ) : (
-                     <Plus size={16} className="text-slate-200 group-hover:text-indigo-600"/>
-                   )}
-                   <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[8px] font-black bg-white px-1 rounded shadow-sm opacity-0 group-hover:opacity-100 transition-opacity">
-                     {seat.owner_name || 'Empty'}
-                   </span>
-                 </button>
-               ))}
-             </div>
-             
-             <div className="max-w-xl mx-auto p-6 bg-indigo-50 rounded-3xl border border-indigo-100 flex items-start gap-4">
-               <AlertCircle size={24} className="text-indigo-600 shrink-0 mt-1"/>
-               <div className="text-sm leading-relaxed text-indigo-900">
-                 <p className="font-black mb-1">부동산 거래 규칙</p>
-                 <ul className="list-disc ml-4 space-y-1 font-medium text-xs opacity-80">
-                   <li>구매 금액의 <strong>10%는 세금</strong>으로 차감되며, 나머지 90%가 이전 주인에게 송금됩니다.</li>
-                   <li>주인이 없는 자리를 구매할 때는 전액 정부로 귀속됩니다.</li>
-                   <li>현재 학급은 <strong>{sessionSettings?.auto_approve_estate ? '자동 거래' : '선생님 승인 후 거래'}</strong> 모드입니다.</li>
-                 </ul>
-               </div>
-             </div>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 space-y-6">
+              <div className="bg-white p-6 rounded-3xl border shadow-sm">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-black flex items-center gap-2"><TrendingUp className="text-indigo-600"/> 실시간 시장 정보</h3>
+                  <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400"><Clock size={12}/> 1시간 단위 갱신</div>
+                </div>
+                
+                {isLoading && marketData.stocks.length === 0 ? (
+                  <div className="py-20 flex flex-col items-center justify-center gap-4">
+                    <div className="w-10 h-10 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin"></div>
+                    <p className="text-sm font-bold text-slate-400">구글 금융 실시간 데이터 수집 중...</p>
+                  </div>
+                ) : (
+                  <div className="space-y-8">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {marketData.stocks.map((s, i) => {
+                        const isUp = s.change && (s.change.includes('+') || !s.change.includes('-'));
+                        const ticker = s.name.match(/\(([^)]+)\)/)?.[1] || s.ticker || 'STOCK';
+                        const displayName = s.name.replace(/\([^)]+\)/, '').trim();
+                        return (
+                          <div key={i} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-all flex flex-col justify-between h-44 relative overflow-hidden group">
+                            <div className="flex justify-between items-start mb-2">
+                              <div>
+                                <p className="text-xs font-black text-slate-900 leading-none mb-1">{ticker}</p>
+                                <p className="text-xs font-bold text-slate-400">{displayName}</p>
+                              </div>
+                              <span className="bg-slate-50 text-[10px] font-bold text-slate-500 px-2 py-1 rounded-lg border border-slate-100">korean_stock</span>
+                            </div>
+                            <div className="mt-auto">
+                              <h4 className="text-2xl font-black text-slate-900 tracking-tight">₩{s.price}</h4>
+                            </div>
+                            <div className={`flex items-center justify-end gap-1 mt-2 font-black text-sm ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>
+                              {isUp ? <TrendingUp size={14} className="animate-bounce" /> : <TrendingDown size={14}/>} {s.change}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {marketData.coins.map((c, i) => {
+                        const isUp = c.change && (c.change.includes('+') || !c.change.includes('-'));
+                        const ticker = c.name.match(/\(([^)]+)\)/)?.[1] || 'CRYPTO';
+                        const displayName = c.name.replace(/\([^)]+\)/, '').trim();
+                        return (
+                          <div key={i} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-all flex flex-col justify-between h-44 border-indigo-50">
+                            <div className="flex justify-between items-start mb-2">
+                              <div>
+                                <p className="text-xs font-black text-indigo-600 leading-none mb-1">{ticker}</p>
+                                <p className="text-xs font-bold text-slate-400">{displayName}</p>
+                              </div>
+                              <span className="bg-indigo-50 text-[10px] font-bold text-indigo-400 px-2 py-1 rounded-lg border border-indigo-100">crypto</span>
+                            </div>
+                            <div className="mt-auto"><h4 className="text-2xl font-black text-slate-900 tracking-tight">₩{c.price}</h4></div>
+                            <div className={`flex items-center justify-end gap-1 mt-2 font-black text-sm ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>
+                              {isUp ? <TrendingUp size={14}/> : <TrendingDown size={14}/>} {c.change}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="space-y-6">
+              <div className="bg-white p-6 rounded-3xl border shadow-sm h-full">
+                <h3 className="text-xl font-black flex items-center gap-2 mb-6"><Newspaper className="text-amber-500"/> 오늘의 경제 뉴스</h3>
+                <div className="space-y-4">
+                  {economyNews.map((news, i) => (
+                    <button key={i} onClick={() => { setSelectedNews(news); setNewsSummary(''); }} className="w-full text-left p-4 rounded-2xl border border-transparent hover:border-amber-200 hover:bg-amber-50 transition-all group">
+                      <h4 className="text-sm font-bold text-slate-800 leading-snug mb-2 group-hover:text-amber-900 line-clamp-2">{news.title}</h4>
+                      <div className="flex items-center text-[10px] font-bold text-slate-400 group-hover:text-amber-600">자세히 보기 <ChevronRight size={12}/></div>
+                    </button>
+                  ))}
+                  {economyNews.length === 0 && !isLoading && <div className="py-20 text-center text-slate-400"><p className="text-xs font-bold">구글 뉴스 수집 중...</p></div>}
+                </div>
+              </div>
+            </div>
           </div>
-        )}
+        </div>
+      )}
+
+      {selectedNews && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-6 border-b flex justify-between items-start">
+              <h3 className="text-xl font-black text-slate-800 pr-8">{selectedNews.title}</h3>
+              <button onClick={() => setSelectedNews(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors shrink-0"><X size={20}/></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              <div className="flex gap-3">
+                <button onClick={handleSummarize} disabled={isSummarizing} className="flex-1 bg-indigo-600 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all disabled:opacity-50">{isSummarizing ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <Sparkles size={20}/>} {isSummarizing ? 'AI 분석 중...' : 'AI 뉴스 요약 정리'}</button>
+                <a href={selectedNews.url} target="_blank" rel="noopener noreferrer" className="px-6 bg-slate-100 text-slate-700 py-4 rounded-2xl font-black flex items-center justify-center gap-2 hover:bg-slate-200 transition-all"><ExternalLink size={20}/> 원본 보기</a>
+              </div>
+              {newsSummary && (
+                <div className="p-6 bg-indigo-50 rounded-3xl border border-indigo-100">
+                  <h4 className="text-xs font-black text-indigo-400 mb-3 flex items-center gap-2 uppercase tracking-widest"><Sparkles size={12}/> AI 요약 결과 ({sessionSettings?.school_level === 'elementary' ? '초등' : sessionSettings?.school_level === 'middle' ? '중등' : '고등'} 수준)</h4>
+                  <p className="text-slate-800 leading-relaxed font-medium whitespace-pre-wrap">{newsSummary}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'bank' && (
+        <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
+          <div className="flex flex-col md:flex-row gap-8">
+            <div className="flex-1 space-y-4">
+              <h3 className="text-lg font-bold flex items-center gap-2"><Landmark size={20} className="text-emerald-500"/> 은행 이용하기</h3>
+              <div className="grid grid-cols-1 gap-3">
+                <button onClick={() => setBankPath({from: 'balance', to: 'bank_balance'})} className={`p-5 border rounded-2xl text-left transition-all border-l-8 ${bankPath?.from === 'balance' ? 'bg-emerald-50 border-emerald-600 shadow-md ring-2 ring-emerald-200 scale-102 border-l-emerald-600' : 'bg-white hover:bg-slate-50 border-l-indigo-400'}`}>
+                  <p className="font-bold text-slate-800">현금 → 은행 (입금)</p>
+                  <p className="text-[11px] text-slate-400 mt-1">주간 이자가 발생합니다. (7일 락업 적용)</p>
+                </button>
+                <button onClick={() => setBankPath({from: 'bank_balance', to: 'balance'})} className={`p-5 border rounded-2xl text-left transition-all border-l-8 ${bankPath?.from === 'bank_balance' ? 'bg-emerald-50 border-emerald-600 shadow-md ring-2 ring-emerald-200 scale-102 border-l-emerald-600' : 'bg-white hover:bg-slate-50 border-l-emerald-400'}`}>
+                  <p className="font-bold text-slate-800">은행 → 현금 (출금)</p>
+                  <p className="text-[11px] text-slate-400 mt-1">은행 잔고에서 현금으로 이동합니다.</p>
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 space-y-6">
+              <h3 className="text-lg font-bold">이체 실행</h3>
+              <div className="space-y-4 p-6 bg-slate-50 rounded-3xl border border-dashed">
+                <div className="space-y-2">
+                  <input type="number" value={transferAmount} onChange={(e)=>setTransferAmount(Math.max(0, Number(e.target.value)))} className="w-full bg-white p-4 rounded-2xl text-2xl font-black text-center outline-none border focus:ring-2 focus:ring-emerald-600" placeholder="금액 입력" />
+                  <div className="grid grid-cols-3 gap-2 mt-2">{[50000, 10000, 5000].map(val => (<button key={val} onClick={() => addAmount(val)} className="py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-500 hover:bg-slate-50 transition-all">+{val.toLocaleString()}</button>))}</div>
+                </div>
+                <button onClick={() => bankPath ? handleAssetTransfer(bankPath.from, bankPath.to) : alert('이체 방향을 선택해주세요.')} className={`w-full py-4 rounded-2xl font-black shadow-lg transition-all ${bankPath ? 'bg-emerald-600 text-white hover:bg-emerald-700 active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>{bankPath ? `${bankPath.from === 'balance' ? '입금' : '출금'} 실행하기` : '방향을 먼저 선택하세요'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'quiz' && (
+        <div className="space-y-4">
+          <div className="bg-indigo-600 text-white p-6 rounded-2xl shadow-lg relative overflow-hidden">
+            <h2 className="text-xl font-black">오늘의 일일 퀴즈 💡</h2>
+            <p className="text-indigo-100 text-xs mt-1">매일 자정(00:00)에 새로운 퀴즈로 갱신됩니다! (중복 보상 불가)</p>
+            <HelpCircle size={80} className="absolute -right-4 -bottom-4 opacity-10" />
+          </div>
+          <div className="grid grid-cols-1 gap-4">
+            {dailyQuizzes.map((quiz, qIdx) => {
+              const solved = solvedQuizIds.includes(quiz.id);
+              return (
+                <div key={quiz.id} className={`bg-white p-6 rounded-2xl border shadow-sm transition-all ${solved ? 'opacity-50 grayscale select-none' : 'hover:shadow-md'}`}>
+                  <div className="flex justify-between items-start mb-4">
+                    <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-[10px] font-bold">퀴즈 #{qIdx+1}</span>
+                    <span className={`font-black text-sm ${solved ? 'text-slate-400' : 'text-emerald-600'}`}>+{quiz.reward.toLocaleString()}원</span>
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-800 mb-6 leading-tight">{quiz.question}</h3>
+                  <div className="grid grid-cols-1 gap-2">
+                    {quiz.options.map((opt, oIdx) => (
+                      <button key={oIdx} onClick={() => !solved && handleQuizSolve(quiz, oIdx + 1)} disabled={solved} className={`w-full p-4 rounded-xl text-left text-sm font-bold transition-all border-2 ${solved ? 'bg-slate-50 border-slate-100 cursor-not-allowed' : 'hover:border-indigo-600 hover:bg-indigo-50 border-slate-50'}`}><span className="text-indigo-600 mr-2">{oIdx + 1}.</span> {opt}</button>
+                    ))}
+                  </div>
+                  {solved && <div className="mt-4 flex items-center justify-center gap-2 text-emerald-600 font-bold text-sm bg-emerald-50 py-3 rounded-xl border border-emerald-100"><CheckCircle2 size={18}/> 이미 참여 완료한 퀴즈입니다</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white p-6 rounded-2xl border shadow-sm mt-8">
+        <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><History size={18}/> 최근 활동 내역</h3>
+        <div className="space-y-3">
+          {logs.map(log => {
+            const isIncome = log.receiver_id === studentId;
+            return (
+              <div key={log.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl text-xs">
+                <div className="flex gap-3 items-center">
+                  <div className={`w-1 h-8 rounded-full ${isIncome ? 'bg-emerald-400' : 'bg-red-400'}`}></div>
+                  <div><p className="font-bold text-slate-800">{log.description}</p><p className="text-slate-400 text-[10px]">{new Date(log.created_at).toLocaleString()}</p></div>
+                </div>
+                <p className={`font-black text-sm ${isIncome ? 'text-emerald-600' : 'text-red-600'}`}>{isIncome ? '+' : '-'}{log.amount.toLocaleString()}원</p>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
